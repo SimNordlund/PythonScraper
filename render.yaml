@@ -1,0 +1,23 @@
+services:
+  # ── always-on Django web (admin / health endpoint) ────────────────
+  - type: web
+    name: django-web
+    env: docker
+    plan: free                # or "standard"
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /
+
+jobs:
+  # ── scrape race results every 30 min ──────────────────────────────
+  - type: cron
+    name: scrape-results
+    env: docker
+    schedule: "*/30 * * * *"        # crontab in UTC
+    command: python manage.py scrape_results
+
+  # ── scrape start-list daily 02:00 UTC ─────────────────────────────
+  - type: cron
+    name: scrape-startlist
+    env: docker
+    schedule: "0 2 * * *"
+    command: python manage.py scrape_startlist
