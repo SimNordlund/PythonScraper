@@ -1,7 +1,6 @@
-# ───── Base image ────────────────────────────────────────────────────
 FROM python:3.12-slim
 
-# ───── System deps Playwright needs (Chrome libs, Node to run it) ────
+# ───── Playwright & system libraries ─────────────────────────────────
 RUN apt-get update && apt-get install -y \
         curl gnupg ca-certificates \
     && curl -fsSL https://deb.nodesource.com/setup_current.x | bash - \
@@ -11,18 +10,18 @@ RUN apt-get update && apt-get install -y \
        libgtk-3-0 libpango-1.0-0 libasound2 \
     && rm -rf /var/lib/apt/lists/*
 
-# ───── Python deps ───────────────────────────────────────────────────
+# ───── Python dependencies ──────────────────────────────────────────
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
-    && playwright install --with-deps  # installs browser binaries
+    && playwright install --with-deps            
 
 # ───── Project code ─────────────────────────────────────────────────
 COPY . .
 
-# ───── Django environment ───────────────────────────────────────────
+# ───── Runtime env vars ─────────────────────────────────────────────
 ENV PYTHONUNBUFFERED=1
 ENV DJANGO_SETTINGS_MODULE=horseproj.settings
-ENV PORT=8000                # Render injects $PORT for web services
 
-CMD ["gunicorn", "horseproj.wsgi:application", "--bind=0.0.0.0:${PORT}"]
+# ───── Launch Django via Gunicorn (Render sets $PORT) ───────────────
+CMD sh -c "gunicorn horseproj.wsgi:application --bind 0.0.0.0:$PORT"
