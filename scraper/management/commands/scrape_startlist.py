@@ -2,7 +2,6 @@
 import asyncio, re, unicodedata, logging
 from dataclasses import dataclass
 from typing import List
-
 from playwright.async_api import async_playwright, Error as PlaywrightError
 from django.core.management.base import BaseCommand
 from scraper.models import StartList
@@ -110,8 +109,8 @@ async def scrape_startlist(url: str) -> List[StartRow]:
 
 # ───────── management command ─────────
 class Command(BaseCommand):
-    START_ID = 609_930
-    END_ID   = 609_938
+    START_ID = 609_939
+    END_ID   = 609_951
     help = "Scrape hard-coded ts-ID range into Startlista"
 
     def handle(self, *args, **kwargs):
