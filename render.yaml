@@ -1,23 +1,30 @@
-services:
-  # ── always-on Django web (admin / health endpoint) ────────────────
-  - type: web
-    name: django-web
-    env: docker
-    plan: free                # or "standard"
-    dockerfilePath: ./Dockerfile
-    healthCheckPath: /
-
 jobs:
-  # ── scrape race results every 30 min ──────────────────────────────
-  - type: cron
-    name: scrape-results
-    env: docker
-    schedule: "0 20 * * *"  
-    command: python manage.py scrape_results
+# ── STARTLISTA ──────────────────────────────────────────────────────
+# summer: Mar-Oct  (UTC+2 ⇒ 22:00 SE  = 20:00 UTC)
+- type: cron
+  name: scrape-startlist-summer
+  env: docker
+  schedule: "0 20 * 3-10 *"              # minute hour day month dow
+  command: python manage.py scrape_startlist
 
-  # ── scrape start-list daily 02:00 UTC ─────────────────────────────
-  - type: cron
-    name: scrape-startlist
-    env: docker
-    schedule: "0 20 * * *"  
-    command: python manage.py scrape_startlist
+# winter: Nov-Feb (UTC+1 ⇒ 22:00 SE = 21:00 UTC)
+- type: cron
+  name: scrape-startlist-winter
+  env: docker
+  schedule: "0 21 * 11,12,1,2 *"
+  command: python manage.py scrape_startlist
+
+# ── RESULTAT (every 30 min) ─────────────────────────────────────────
+# summer: 10-20 UTC  (00 + 30 past each hour)
+- type: cron
+  name: scrape-results-summer
+  env: docker
+  schedule: "0,30 10-20 * 3-10 *"
+  command: python manage.py scrape_results
+
+# winter: 11-21 UTC
+- type: cron
+  name: scrape-results-winter
+  env: docker
+  schedule: "0,30 11-21 * 11,12,1,2 *"
+  command: python manage.py scrape_results
