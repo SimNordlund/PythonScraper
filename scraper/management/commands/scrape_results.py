@@ -91,6 +91,12 @@ async def scrape_page(url: str) -> List[Row]:
         except PlaywrightError:
             await browser.close(); return []
 
+        # Vänta tills React-tabellen finns innan vi börjar läsa //Changed!
+        try:  # //Changed!
+            await page.wait_for_selector("div[role='row'][data-rowindex]", timeout=10_000)  # //Changed!
+        except PlaywrightError:  # //Changed!
+            await browser.close(); return []  # //Changed!
+
         nav = page.locator("div[class*='RaceDayNavigator_title'] span")
         if await nav.count() < 2:
             await browser.close(); return []
