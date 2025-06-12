@@ -15,16 +15,16 @@ jobs:
   command: python manage.py scrape_startlist
 
 # ── RESULTAT (every 30 min) ─────────────────────────────────────────
-# summer: 10-20 UTC  (00 + 30 past each hour)
+# summer: 
 - type: cron
   name: scrape-results-summer
   env: docker
-  schedule: "*/10 10-20 * 3-10 *" 
+  schedule: "0,30 10-20 * 3-10 *" 
   command: python manage.py scrape_results
 
-# winter: 11-21 UTC
+# winter:
 - type: cron
   name: scrape-results-winter
   env: docker
-  schedule: "*/10 11-21 * 11,12,1,2 *"
+  schedule: "0,30 11-21 * 11,12,1,2 *"
   command: python manage.py scrape_results
