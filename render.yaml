@@ -19,12 +19,12 @@ jobs:
 - type: cron
   name: scrape-results-summer
   env: docker
-  schedule: "0,30 10-20 * 3-10 *" 
+  schedule: "0,15 10-20 * 3-10 *" 
   command: python manage.py scrape_results
 
 # winter:
 - type: cron
   name: scrape-results-winter
   env: docker
-  schedule: "0,30 11-21 * 11,12,1,2 *"
+  schedule: "0,15 11-21 * 11,12,1,2 *"
   command: python manage.py scrape_results
