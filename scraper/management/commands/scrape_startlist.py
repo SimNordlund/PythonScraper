@@ -92,8 +92,13 @@ async def scrape_startlist(url: str) -> List[StartRow]:
             lopp_nr = int(m[1])
 
             section = header.locator("xpath=ancestor::div[contains(@class,'MuiBox-root')][1]")
-            await section.locator("div[role='row'][data-rowindex]").first.wait_for()
-            rows = await section.locator("div[role='row'][data-rowindex]").all()
+            
+            
+            # Hämta ALLA rader direkt //Changed!
+            rows = await section.locator("div[role='row'][data-rowindex]").all()  # //Changed!
+            if not rows:                                                          # //Changed!
+                logging.info(f"Lopp {lopp_nr}: inga rader, hoppar över")           # //Changed!
+                continue                                                          # //Changed!
 
             for row in rows:
                 cell = lambda f: row.locator(f"div[data-field='{f}']")
