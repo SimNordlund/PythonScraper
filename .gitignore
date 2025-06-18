@@ -1,0 +1,3 @@
+# Miljö-variabler och hemligheter
+.env
+*.env
