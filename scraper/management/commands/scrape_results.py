@@ -154,7 +154,7 @@ class Command(BaseCommand):
     help = "Scrape fixed ID range 609766 → 609963 into Resultat"
 
     START_ID = 609_969
-    END_ID   = 609_971
+    END_ID   = 609_973
 
     def handle(self, *args, **opts):
         base = "https://sportapp.travsport.se/race/raceday/ts{}/results/all"
