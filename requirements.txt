@@ -1,5 +1,5 @@
-Django>=5.2,<6          # your web framework
-psycopg[binary]>=3.1    # Postgres driver Django uses in 2024+
-playwright==1.39        # the scraper’s browser automation
-gunicorn                # production-grade WSGI server
+Django>=5.2,<6         
+psycopg[binary]>=3.1   
+playwright==1.39       
+gunicorn                
 python-dotenv

@@ -1,44 +1,43 @@
 # scraper/models.py
 from django.db import models
 
-# ─────────── RESULTAT ───────────
 class HorseResult(models.Model):
     id = models.BigAutoField(primary_key=True)
 
-    # nycklar
-    datum   = models.IntegerField(db_column="datum")          # //Changed!
-    bankod  = models.CharField(max_length=2, db_column="bankod")  # //Changed!
-    lopp    = models.IntegerField(db_column="lopp")           # //Changed!
-    nr      = models.IntegerField(db_column="nr")             # //Changed!
-    namn    = models.CharField(max_length=50, db_column="namn")   # //Changed!
+  
+    datum   = models.IntegerField(db_column="datum")          
+    bankod  = models.CharField(max_length=2, db_column="bankod")  
+    lopp    = models.IntegerField(db_column="lopp")           
+    nr      = models.IntegerField(db_column="nr")             
+    namn    = models.CharField(max_length=50, db_column="namn")   
 
-    # position
-    distans = models.IntegerField(null=True, blank=True, db_column="distans")  # //Changed!
-    tillagg = models.IntegerField(null=True, blank=True, db_column="tillagg")  # //Changed!
-    spar    = models.IntegerField(null=True, blank=True, db_column="spar")     # //Changed!
+   
+    distans = models.IntegerField(null=True, blank=True, db_column="distans")  
+    tillagg = models.IntegerField(null=True, blank=True, db_column="tillagg")  
+    spar    = models.IntegerField(null=True, blank=True, db_column="spar")     
 
-    # tider
-    placering   = models.IntegerField(null=True, blank=True, db_column="placering")  # //Changed!
-    tid         = models.FloatField(null=True, blank=True, db_column="tid")          # //Changed!
-    startmetod  = models.CharField(max_length=1, blank=True, db_column="startmetod") # //Changed!
-    galopp      = models.CharField(max_length=1, blank=True, db_column="galopp")     # //Changed!
-    underlag    = models.CharField(max_length=1, blank=True, db_column="underlag")   # //Changed!
 
-    ny_tid      = models.FloatField(null=True, blank=True, db_column="nytid")        # //Changed!
-    diff_tid    = models.FloatField(null=True, blank=True, db_column="difftid")      # //Changed!
-    diff_vinst  = models.FloatField(null=True, blank=True, db_column="diffvinst")    # //Changed!
-    diff_medel  = models.FloatField(null=True, blank=True, db_column="diffmedel")    # //Changed!
+    placering   = models.IntegerField(null=True, blank=True, db_column="placering")  
+    tid         = models.FloatField(null=True, blank=True, db_column="tid")          
+    startmetod  = models.CharField(max_length=1, blank=True, db_column="startmetod") 
+    galopp      = models.CharField(max_length=1, blank=True, db_column="galopp")     
+    underlag    = models.CharField(max_length=1, blank=True, db_column="underlag")   
 
-    # övrigt
-    sortering        = models.IntegerField(null=True, blank=True, db_column="sortering")        # //Changed!
-    pris             = models.IntegerField(null=True, blank=True, db_column="pris")             # //Changed!
-    tillagg_tid      = models.FloatField(null=True, blank=True, db_column="tillaggtid")         # //Changed!
-    lopp_tid         = models.FloatField(null=True, blank=True, db_column="lopptid")            # //Changed!
-    sortering_plac   = models.IntegerField(null=True, blank=True, db_column="sorteringplac")    # //Changed!
-    sortering_tid    = models.IntegerField(null=True, blank=True, db_column="sorteringtid")     # //Changed!
-    sortering_pris   = models.IntegerField(null=True, blank=True, db_column="sorteringpris")    # //Changed!
-    sortering_klass  = models.IntegerField(null=True, blank=True, db_column="sorteringklass")   # //Changed!
-    lopp_klass       = models.FloatField(null=True, blank=True, db_column="loppklass")          # //Changed!
+    ny_tid      = models.FloatField(null=True, blank=True, db_column="nytid")        
+    diff_tid    = models.FloatField(null=True, blank=True, db_column="difftid")      
+    diff_vinst  = models.FloatField(null=True, blank=True, db_column="diffvinst")    
+    diff_medel  = models.FloatField(null=True, blank=True, db_column="diffmedel")    
+
+  
+    sortering        = models.IntegerField(null=True, blank=True, db_column="sortering")        
+    pris             = models.IntegerField(null=True, blank=True, db_column="pris")             
+    tillagg_tid      = models.FloatField(null=True, blank=True, db_column="tillaggtid")         
+    lopp_tid         = models.FloatField(null=True, blank=True, db_column="lopptid")            
+    sortering_plac   = models.IntegerField(null=True, blank=True, db_column="sorteringplac")    
+    sortering_tid    = models.IntegerField(null=True, blank=True, db_column="sorteringtid")     
+    sortering_pris   = models.IntegerField(null=True, blank=True, db_column="sorteringpris")    
+    sortering_klass  = models.IntegerField(null=True, blank=True, db_column="sorteringklass")   
+    lopp_klass       = models.FloatField(null=True, blank=True, db_column="loppklass")          
 
     class Meta:
         db_table = "resultat"
@@ -49,18 +48,17 @@ class HorseResult(models.Model):
         return f"{self.datum} L{self.lopp} #{self.nr} {self.namn}"
 
 
-# ─────────── STARTLISTA ───────────
 class StartList(models.Model):
     id = models.BigAutoField(primary_key=True)
 
-    startdatum = models.IntegerField(db_column="startdatum")   # //Changed!
-    bankod     = models.CharField(max_length=2, db_column="bankod")  # //Changed!
-    lopp       = models.IntegerField(db_column="lopp")         # //Changed!
-    nr         = models.IntegerField(db_column="nr")           # //Changed!
-    namn       = models.CharField(max_length=50, db_column="namn")   # //Changed!
-    spar       = models.IntegerField(null=True, blank=True, db_column="spar")       # //Changed!
-    distans    = models.IntegerField(null=True, blank=True, db_column="distans")    # //Changed!
-    kusk       = models.CharField(max_length=120, db_column="kusk")                 # //Changed!
+    startdatum = models.IntegerField(db_column="startdatum")   
+    bankod     = models.CharField(max_length=2, db_column="bankod")  
+    lopp       = models.IntegerField(db_column="lopp")         
+    nr         = models.IntegerField(db_column="nr")           
+    namn       = models.CharField(max_length=50, db_column="namn")   
+    spar       = models.IntegerField(null=True, blank=True, db_column="spar")       
+    distans    = models.IntegerField(null=True, blank=True, db_column="distans")    
+    kusk       = models.CharField(max_length=120, db_column="kusk")                 
 
     class Meta:
         db_table = "startlista"

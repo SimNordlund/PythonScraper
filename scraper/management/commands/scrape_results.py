@@ -8,7 +8,7 @@ from scraper.models import HorseResult
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
-# ───────────────────────── helpers ───────────────────────────────────
+
 SWEDISH_MONTH = {
     "JANUARI": 1, "FEBRUARI": 2, "MARS": 3, "APRIL": 4, "MAJ": 5,
     "JUNI": 6, "JULI": 7, "AUGUSTI": 8, "SEPTEMBER": 9, "OKTOBER": 10,
@@ -17,9 +17,9 @@ SWEDISH_MONTH = {
 
 def swedish_date_to_yyyymmdd(text: str) -> str:
     parts = text.strip().upper().split()
-    if len(parts) == 4:         # e.g. “LÖRDAG 3 MAJ 2025”
+    if len(parts) == 4:        
         _, d, m, y = parts
-    else:                       # e.g. “3 MAJ 2025”
+    else:                    
         d, m, y = parts
     return f"{int(y):04d}{SWEDISH_MONTH[m]:02d}{int(d):02d}"
 
@@ -46,7 +46,7 @@ def parse_tid_block(txt: str):
     flags = m[2].lower()
     return tid, ("a" if "a" in flags else ""), ("g" if "g" in flags else "")
 
-# ────────────────── FULLNAME → bankod mapping ───────────────────────
+
 FULLNAME_TO_BANKOD = {
     "ARVIKA": "Ar",  "AXEVALLA": "Ax",  "BERGSÅKER": "B",  "BODEN": "Bo",
     "BOLLNÄS": "Bs", "DANNERO": "D",   "DALA JÄRNA": "Dj","ESKILSTUNA": "E",
@@ -72,14 +72,14 @@ def track_to_bankod(name: str) -> str:
     name_ascii = _strip_diacritics(name_up)
     return _ASCII_FALLBACK.get(name_ascii, name_up[:2].title())
 
-# ───────────────────────── DTO ───────────────────────────────────────
+
 @dataclass
 class Row:
     datum: int; bankod: str; lopp: int; nr: int; namn: str
     distans: int | None; spar: int | None; placering: int | None
     tid: float | None; startmetod: str; galopp: str; underlag: str
 
-# ───────────────── scrape a single race-day page ─────────────────────
+
 async def scrape_page(url: str) -> List[Row]:
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
@@ -147,7 +147,6 @@ async def scrape_page(url: str) -> List[Row]:
         await browser.close()
         return data
 
-# ───────────────────────── Django command ────────────────────────────
 class Command(BaseCommand):
     help = "Scrape fixed ID range 609766 → 609963 into Resultat"
 

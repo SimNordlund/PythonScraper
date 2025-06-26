@@ -8,7 +8,7 @@ from scraper.models import StartList
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
-# ───────── helpers ─────────
+
 SWEDISH_MONTH = {
     "JANUARI": 1, "FEBRUARI": 2, "MARS": 3, "APRIL": 4, "MAJ": 5,
     "JUNI": 6, "JULI": 7, "AUGUSTI": 8, "SEPTEMBER": 9, "OKTOBER": 10,
@@ -19,13 +19,13 @@ def swedish_date_to_yyyymmdd(txt: str) -> str:
     d, m, y = (p[1], p[2], p[3]) if len(p) == 4 else p
     return f"{int(y):04d}{SWEDISH_MONTH[m]:02d}{int(d):02d}"
 
-dist_re = re.compile(r"\s*(\d+)\s*/\s*([\d,]+)", re.I)   # allow 1,609
+dist_re = re.compile(r"\s*(\d+)\s*/\s*([\d,]+)", re.I) 
 def parse_dist_spar(txt: str):
     m = dist_re.match(txt)
     if not m:
         return None, None
     spar = int(m[1])
-    dist = int(m[2].replace(",", ""))   # "1,609" → 1609
+    dist = int(m[2].replace(",", ""))   
     return dist, spar
 
 def _strip(s: str) -> str:
@@ -46,13 +46,13 @@ def track_to_bankod(n: str) -> str:
     n = n.strip().upper()
     return FULLNAME_TO_BANKOD.get(n, FULLNAME_TO_BANKOD.get(_strip(n), n[:2].title()))
 
-# ───────── DTO ─────────
+
 @dataclass
 class StartRow:
     startdatum: int; bankod: str; lopp: int; nr: int; namn: str
     spar: int | None; distans: int | None; kusk: str
 
-# ───────── scrape one page ─────────
+
 async def scrape_startlist(url: str) -> List[StartRow]:
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
@@ -63,7 +63,6 @@ async def scrape_startlist(url: str) -> List[StartRow]:
         except PlaywrightError:
             await browser.close(); return []
 
-        # wait until grid rows exist (react finished)
         try:
             await page.wait_for_selector("div[role='row'][data-rowindex]", timeout=10_000)
         except PlaywrightError:
@@ -73,10 +72,10 @@ async def scrape_startlist(url: str) -> List[StartRow]:
         if await nav.count() < 2:
             await browser.close(); return []
 
-                # first span can be "TÄVLINGSDAG TINGSRYD", "TRAVTÄVLING SOLVALLA", etc.
+              
         raw_track  = (await nav.nth(0).inner_text()).strip().upper()
         if raw_track.startswith(("TÄVLINGSDAG", "TRAVTÄVLING")):
-            raw_track = raw_track.split(maxsplit=1)[1]          # keep second word
+            raw_track = raw_track.split(maxsplit=1)[1]        
         bankod     = track_to_bankod(raw_track)
 
         
@@ -94,11 +93,11 @@ async def scrape_startlist(url: str) -> List[StartRow]:
             section = header.locator("xpath=ancestor::div[contains(@class,'MuiBox-root')][1]")
             
             
-            # Hämta ALLA rader direkt //Changed!
-            rows = await section.locator("div[role='row'][data-rowindex]").all()  # //Changed!
-            if not rows:                                                          # //Changed!
-                logging.info(f"Lopp {lopp_nr}: inga rader, hoppar över")           # //Changed!
-                continue                                                          # //Changed!
+          
+            rows = await section.locator("div[role='row'][data-rowindex]").all()  
+            if not rows:                                                          
+                logging.info(f"Lopp {lopp_nr}: inga rader, hoppar över")           
+                continue                                                          
 
             for row in rows:
                 cell = lambda f: row.locator(f"div[data-field='{f}']")
@@ -112,7 +111,7 @@ async def scrape_startlist(url: str) -> List[StartRow]:
         await browser.close()
         return out
 
-# ───────── management command ─────────
+
 class Command(BaseCommand):
     START_ID = 609_983
     END_ID   = 609_994
