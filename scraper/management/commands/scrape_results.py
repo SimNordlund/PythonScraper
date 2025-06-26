@@ -23,7 +23,7 @@ def swedish_date_to_yyyymmdd(text: str) -> str:
         d, m, y = parts
     return f"{int(y):04d}{SWEDISH_MONTH[m]:02d}{int(d):02d}"
 
-# capture spår / distans / underlags-bokstav  (n = “något tung”, t = “tung”, v = “vinter”)
+
 dist_re = re.compile(r"\s*(\d+)\s*/\s*(\d+)\s*([ntv]?)\s*$", re.I)
 time_re = re.compile(r"\s*([\d.,]+)\s*([ag]*)", re.I)
 
@@ -48,7 +48,6 @@ def parse_tid_block(txt: str):
 
 # ────────────────── FULLNAME → bankod mapping ───────────────────────
 FULLNAME_TO_BANKOD = {
-    # Swedish spelling with diacritics
     "ARVIKA": "Ar",  "AXEVALLA": "Ax",  "BERGSÅKER": "B",  "BODEN": "Bo",
     "BOLLNÄS": "Bs", "DANNERO": "D",   "DALA JÄRNA": "Dj","ESKILSTUNA": "E",
     "JÄGERSRO": "J", "FÄRJESTAD": "F", "GÄVLE": "G",      "GÖTEBORG TRAV": "Gt",
@@ -91,11 +90,10 @@ async def scrape_page(url: str) -> List[Row]:
         except PlaywrightError:
             await browser.close(); return []
 
-        # Vänta tills React-tabellen finns innan vi börjar läsa //Changed!
-        try:  # //Changed!
-            await page.wait_for_selector("div[role='row'][data-rowindex]", timeout=10_000)  # //Changed!
-        except PlaywrightError:  # //Changed!
-            await browser.close(); return []  # //Changed!
+        try:  
+            await page.wait_for_selector("div[role='row'][data-rowindex]", timeout=10_000)  
+        except PlaywrightError:  
+            await browser.close(); return []  
 
         nav = page.locator("div[class*='RaceDayNavigator_title'] span")
         if await nav.count() < 2:
@@ -154,7 +152,7 @@ class Command(BaseCommand):
     help = "Scrape fixed ID range 609766 → 609963 into Resultat"
 
     START_ID = 609_969
-    END_ID   = 609_973
+    END_ID   = 609_980
 
     def handle(self, *args, **opts):
         base = "https://sportapp.travsport.se/race/raceday/ts{}/results/all"
