@@ -113,8 +113,8 @@ async def scrape_startlist(url: str) -> List[StartRow]:
 
 
 class Command(BaseCommand):
-    START_ID = 610_090
-    END_ID   = 610_150
+    START_ID = 610_070
+    END_ID   = 610_170
     help = "Scrape hard-coded ts-ID range into Startlista"
 
     def handle(self, *args, **kwargs):

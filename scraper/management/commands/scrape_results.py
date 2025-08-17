@@ -150,7 +150,7 @@ async def scrape_page(url: str) -> List[Row]:
 class Command(BaseCommand):
     help = "Scrape fixed ID range 609766 → 609963 into Resultat"
 
-    START_ID = 610_110
+    START_ID = 610_070
     END_ID   = 610_170
 
     def handle(self, *args, **opts):
