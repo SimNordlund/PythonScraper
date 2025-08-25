@@ -67,3 +67,19 @@ class StartList(models.Model):
 
     def __str__(self):                                              
         return f"{self.startdatum} L{self.lopp} #{self.nr} {self.namn}" 
+    
+    # //Changed! NY MODELL: Proposition
+class Proposition(models.Model):  # //Changed!
+    id          = models.BigAutoField(primary_key=True)  # //Changed!
+    startdatum  = models.IntegerField(db_column="startdatum")       # //Changed!
+    bankod      = models.CharField(max_length=2, db_column="bankod")# //Changed!
+    namn        = models.CharField(max_length=50, db_column="namn") # //Changed!
+    proposition = models.IntegerField(db_column="proposition")      # //Changed!
+
+    class Meta:  # //Changed!
+        db_table = "proposition"                                    # //Changed!
+        ordering = ("startdatum", "bankod", "proposition", "namn")  # //Changed!
+        unique_together = ("startdatum", "bankod", "namn", "proposition")  # //Changed!
+
+    def __str__(self):  # //Changed!
+        return f"{self.startdatum} {self.bankod} {self.proposition} {self.namn}"  # //Changed!
