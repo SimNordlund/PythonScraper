@@ -61,8 +61,8 @@ class PropRow:
     bankod: str
     namn: str
     proposition: int
-    distans: int | None = None          # //Changed!
-    kuskanskemal: str | None = None     # //Changed!
+    distans: int | None = None
+    kuskanskemal: str | None = None  # //Changed!
 
 # --------------------------------------
 #  A) Skrapa en enskild proposition-sida
@@ -121,23 +121,7 @@ async def scrape_proposition_page(url: str) -> List[PropRow]:
         if prop_num is None:
             await browser.close(); return []
 
-        # Hämta "Ligan" = kuskanskemal (en gång per sida)                # //Changed!
-        kuskanskemal: str | None = None                                  # //Changed!
-        try:                                                              # //Changed!
-            lig = page.locator("xpath=(//*[contains(., 'Ligan')])[1]")    # //Changed!
-            if await lig.count() > 0:                                     # //Changed!
-                t1 = (await lig.first.inner_text()).strip()               # //Changed!
-                # Kolla om värdet står i nästa syskon                      # //Changed!
-                nxt = lig.first.locator("xpath=following-sibling::*[1]")  # //Changed!
-                t2 = (await nxt.first.inner_text()).strip() if await nxt.count() else ""  # //Changed!
-                blob = f"{t1} {t2}".strip()                               # //Changed!
-                m = re.search(r"Ligan\s*[:\-]?\s*(.+)", blob, flags=re.I) # //Changed!
-                if m:                                                     # //Changed!
-                    kuskanskemal = m.group(1).strip()                     # //Changed!
-        except Exception:                                                 # //Changed!
-            pass                                                          # //Changed!
-
-        # Hästnamn + distans per rad
+        # Hästnamn + distans + KUSKÖNSKEMÅL per rad                       # //Changed!
         rows = await page.locator("div[role='row'][data-rowindex]").all()
         out: List[PropRow] = []
         for row in rows:
@@ -151,19 +135,38 @@ async def scrape_proposition_page(url: str) -> List[PropRow]:
             if not namn:
                 continue
 
-            # distans (kan saknas)                                         # //Changed!
-            dist_val: int | None = None                                    # //Changed!
-            dist_cell = row.locator("div[data-field='distance']")          # //Changed!
-            if await dist_cell.count() > 0:                                # //Changed!
-                dist_txt = (await dist_cell.first.inner_text()).strip()    # //Changed!
-                m = re.search(r"(\d{3,5})", dist_txt)                      # //Changed!
-                if m:                                                      # //Changed!
-                    dist_val = int(m.group(1))                             # //Changed!
+            # distans (kan saknas)
+            dist_val: int | None = None
+            dist_cell = row.locator("div[data-field='distance']")
+            if await dist_cell.count() > 0:
+                dist_txt = (await dist_cell.first.inner_text()).strip()
+                m = re.search(r"(\d{3,5})", dist_txt)
+                if m:
+                    dist_val = int(m.group(1))
+
+            # kuskanskemål: parse driverPreferences i samma rad           # //Changed!
+            kusk_pref: str | None = None                                   # //Changed!
+            pref_cell = row.locator("div[data-field='driverPreferences']")  # //Changed!
+            if await pref_cell.count() > 0:                                 # //Changed!
+                # Ta hela celltexten och hitta "n. Namn"                   # //Changed!
+                raw = (await pref_cell.first.inner_text()).strip()          # //Changed!
+                raw = re.sub(r"[ \t]+", " ", raw)                           # //Changed!
+                pairs = re.findall(r"(\d+)\s*\.\s*([A-Za-zÅÄÖåäö][^(\n]+)", raw)  # //Changed!
+                if pairs:                                                   # //Changed!
+                    items = [f"{n}. {nm.strip()}" for n, nm in pairs]       # //Changed!
+                    kusk_pref = " | ".join(items)                           # //Changed!
+                else:                                                       # //Changed!
+                    # Fallback: plocka alla <a>-texter i ordning           # //Changed!
+                    a = pref_cell.first.locator("a")                        # //Changed!
+                    cnt = await a.count()                                   # //Changed!
+                    if cnt > 0:                                             # //Changed!
+                        names = [(await a.nth(i).inner_text()).strip() for i in range(cnt)]  # //Changed!
+                        kusk_pref = " | ".join(f"{i+1}. {nm}" for i, nm in enumerate(names)) # //Changed!
 
             out.append(PropRow(
                 startdatum, bankod, namn, prop_num,
-                dist_val,                                                 # //Changed!
-                kuskanskemal,                                             # //Changed!
+                dist_val,
+                kusk_pref,  # //Changed!
             ))
 
         await browser.close()
@@ -220,7 +223,7 @@ async def fetch_prop_ids_for_day(day_id: int) -> List[int]:
 
 #  Management command
 class Command(BaseCommand):
-    help = "Scrape proposition-sidor: loopa över raceday-id, hämta prop-ids från list-sidan och skrapa dem."
+    help = "Scrape proposition-sidor: loopa över raceday-id, hämta prop-ids för dagen och skrapa dem."
 
     DAY_START_ID = 610_132
     DAY_END_ID   = 610_300
@@ -260,8 +263,8 @@ class Command(BaseCommand):
                         startdatum=r.startdatum, bankod=r.bankod,
                         namn=r.namn, proposition=r.proposition,
                         defaults={
-                            "distans": r.distans,              # //Changed!
-                            "kuskanskemal": r.kuskanskemal,    # //Changed!
+                            "distans": r.distans,
+                            "kuskanskemal": r.kuskanskemal,  # //Changed!
                         },
                     )
                 cnt = len(rows)
