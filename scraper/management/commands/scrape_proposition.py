@@ -62,11 +62,10 @@ class PropRow:
     namn: str
     proposition: int
     distans: int | None = None
-    kuskanskemal: str | None = None  # //Changed!
+    kuskanskemal: str | None = None  
 
-# --------------------------------------
 #  A) Skrapa en enskild proposition-sida
-# --------------------------------------
+
 async def scrape_proposition_page(url: str) -> List[PropRow]:
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
@@ -121,7 +120,7 @@ async def scrape_proposition_page(url: str) -> List[PropRow]:
         if prop_num is None:
             await browser.close(); return []
 
-        # Hästnamn + distans + KUSKÖNSKEMÅL per rad                       # //Changed!
+        # Hästnamn + distans + KUSKÖNSKEMÅL per rad                       
         rows = await page.locator("div[role='row'][data-rowindex]").all()
         out: List[PropRow] = []
         for row in rows:
@@ -144,29 +143,29 @@ async def scrape_proposition_page(url: str) -> List[PropRow]:
                 if m:
                     dist_val = int(m.group(1))
 
-            # kuskanskemål: parse driverPreferences i samma rad           # //Changed!
-            kusk_pref: str | None = None                                   # //Changed!
-            pref_cell = row.locator("div[data-field='driverPreferences']")  # //Changed!
-            if await pref_cell.count() > 0:                                 # //Changed!
-                # Ta hela celltexten och hitta "n. Namn"                   # //Changed!
-                raw = (await pref_cell.first.inner_text()).strip()          # //Changed!
-                raw = re.sub(r"[ \t]+", " ", raw)                           # //Changed!
-                pairs = re.findall(r"(\d+)\s*\.\s*([A-Za-zÅÄÖåäö][^(\n]+)", raw)  # //Changed!
-                if pairs:                                                   # //Changed!
-                    items = [f"{n}. {nm.strip()}" for n, nm in pairs]       # //Changed!
-                    kusk_pref = " | ".join(items)                           # //Changed!
-                else:                                                       # //Changed!
-                    # Fallback: plocka alla <a>-texter i ordning           # //Changed!
-                    a = pref_cell.first.locator("a")                        # //Changed!
-                    cnt = await a.count()                                   # //Changed!
-                    if cnt > 0:                                             # //Changed!
-                        names = [(await a.nth(i).inner_text()).strip() for i in range(cnt)]  # //Changed!
-                        kusk_pref = " | ".join(f"{i+1}. {nm}" for i, nm in enumerate(names)) # //Changed!
+            # kuskanskemål: parse driverPreferences i samma rad           
+            kusk_pref: str | None = None                                   
+            pref_cell = row.locator("div[data-field='driverPreferences']")  
+            if await pref_cell.count() > 0:                                 
+                # Ta hela celltexten och hitta "n. Namn"                   
+                raw = (await pref_cell.first.inner_text()).strip()          
+                raw = re.sub(r"[ \t]+", " ", raw)                           
+                pairs = re.findall(r"(\d+)\s*\.\s*([A-Za-zÅÄÖåäö][^(\n]+)", raw)  
+                if pairs:                                                   
+                    items = [f"{n}. {nm.strip()}" for n, nm in pairs]       
+                    kusk_pref = " | ".join(items)                           
+                else:                                                       
+                    # Fallback: plocka alla <a>-texter i ordning           
+                    a = pref_cell.first.locator("a")                        
+                    cnt = await a.count()                                   
+                    if cnt > 0:                                             
+                        names = [(await a.nth(i).inner_text()).strip() for i in range(cnt)]  
+                        kusk_pref = " | ".join(f"{i+1}. {nm}" for i, nm in enumerate(names)) 
 
             out.append(PropRow(
                 startdatum, bankod, namn, prop_num,
                 dist_val,
-                kusk_pref,  # //Changed!
+                kusk_pref,  
             ))
 
         await browser.close()
@@ -264,7 +263,7 @@ class Command(BaseCommand):
                         namn=r.namn, proposition=r.proposition,
                         defaults={
                             "distans": r.distans,
-                            "kuskanskemal": r.kuskanskemal,  # //Changed!
+                            "kuskanskemal": r.kuskanskemal, 
                         },
                     )
                 cnt = len(rows)

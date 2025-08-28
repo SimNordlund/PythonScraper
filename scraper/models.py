@@ -71,8 +71,8 @@ class Proposition(models.Model):
     namn        = models.CharField(max_length=50, db_column="namn")
     proposition = models.IntegerField(db_column="proposition")
 
-    distans      = models.IntegerField(null=True, blank=True, db_column="distans")            # //Changed!
-    kuskanskemal = models.CharField(max_length=120, null=True, blank=True, db_column="kuskanskemal")  # //Changed!
+    distans      = models.IntegerField(null=True, blank=True, db_column="distans")            
+    kuskanskemal = models.CharField(max_length=120, null=True, blank=True, db_column="kuskanskemal")  
 
     class Meta:
         db_table = "proposition"
