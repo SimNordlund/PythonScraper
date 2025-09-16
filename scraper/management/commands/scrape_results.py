@@ -1,4 +1,3 @@
-# scraper/management/commands/scrape_results.py
 import asyncio, re, unicodedata, logging
 from dataclasses import dataclass
 from typing import List
