@@ -225,7 +225,7 @@ class Command(BaseCommand):
     help = "Scrape proposition-sidor: loopa över raceday-id, hämta prop-ids för dagen och skrapa dem."
 
     DAY_START_ID = 610_200
-    DAY_END_ID   = 610_350
+    DAY_END_ID   = 610_300
 
     def handle(self, *args, **opts):
         base_prop = "https://sportapp.travsport.se/propositions/raceday/ts{}/proposition/ts{}"
