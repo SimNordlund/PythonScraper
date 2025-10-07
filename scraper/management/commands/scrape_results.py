@@ -147,10 +147,10 @@ async def scrape_page(url: str) -> List[Row]:
         return data
 
 class Command(BaseCommand):
-    help = "Scrape fixed ID range 609766 → 609963 into Resultat"
+    help = "Start id: 605_704"
 
-    START_ID = 605_104
-    END_ID   = 610_235
+    START_ID = 610_230
+    END_ID   = 610_280
 
     def handle(self, *args, **opts):
         base = "https://sportapp.travsport.se/race/raceday/ts{}/results/all"

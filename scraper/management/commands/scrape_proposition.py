@@ -64,8 +64,6 @@ class PropRow:
     distans: int | None = None
     kuskanskemal: str | None = None  
 
-#  A) Skrapa en enskild proposition-sida
-
 async def scrape_proposition_page(url: str) -> List[PropRow]:
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
@@ -81,7 +79,6 @@ async def scrape_proposition_page(url: str) -> List[PropRow]:
         except PlaywrightError:
             await browser.close(); return []
 
-        # Bana + datum
         bankod = None; startdatum = None
         nav = page.locator("div[class*='RaceDayNavigator_title'] span")
         if await nav.count() >= 2:
@@ -108,7 +105,6 @@ async def scrape_proposition_page(url: str) -> List[PropRow]:
         if bankod is None or startdatum is None:
             await browser.close(); return []
 
-        # Propositionnummer (“Prop. X”)
         prop_num = None
         cand = page.locator("xpath=//*[contains(normalize-space(.), 'Prop.')]")
         for i in range(min(await cand.count(), 50)):
@@ -119,12 +115,11 @@ async def scrape_proposition_page(url: str) -> List[PropRow]:
                 break
         if prop_num is None:
             await browser.close(); return []
-
-        # Hästnamn + distans + KUSKÖNSKEMÅL per rad                       
+                       
         rows = await page.locator("div[role='row'][data-rowindex]").all()
         out: List[PropRow] = []
         for row in rows:
-            # namn
+
             cell = row.locator("div[data-field='horseName'], div[data-field='horse']")
             if await cell.count() == 0:
                 continue
@@ -134,7 +129,6 @@ async def scrape_proposition_page(url: str) -> List[PropRow]:
             if not namn:
                 continue
 
-            # distans (kan saknas)
             dist_val: int | None = None
             dist_cell = row.locator("div[data-field='distance']")
             if await dist_cell.count() > 0:
@@ -142,12 +136,11 @@ async def scrape_proposition_page(url: str) -> List[PropRow]:
                 m = re.search(r"(\d{3,5})", dist_txt)
                 if m:
                     dist_val = int(m.group(1))
-
-            # kuskanskemål: parse driverPreferences i samma rad           
+         
             kusk_pref: str | None = None                                   
             pref_cell = row.locator("div[data-field='driverPreferences']")  
             if await pref_cell.count() > 0:                                 
-                # Ta hela celltexten och hitta "n. Namn"                   
+                
                 raw = (await pref_cell.first.inner_text()).strip()          
                 raw = re.sub(r"[ \t]+", " ", raw)                           
                 pairs = re.findall(r"(\d+)\s*\.\s*([A-Za-zÅÄÖåäö][^(\n]+)", raw)  
@@ -155,7 +148,7 @@ async def scrape_proposition_page(url: str) -> List[PropRow]:
                     items = [f"{n}. {nm.strip()}" for n, nm in pairs]       
                     kusk_pref = " | ".join(items)                           
                 else:                                                       
-                    # Fallback: plocka alla <a>-texter i ordning           
+         
                     a = pref_cell.first.locator("a")                        
                     cnt = await a.count()                                   
                     if cnt > 0:                                             
@@ -171,7 +164,6 @@ async def scrape_proposition_page(url: str) -> List[PropRow]:
         await browser.close()
         return out
 
-#  B) Hämta alla proposition-IDs från dag-listan (grid-sida)
 async def fetch_prop_ids_for_day(day_id: int) -> List[int]:
     list_url = f"https://sportapp.travsport.se/propositions/raceday/ts{day_id}"
     async with async_playwright() as p:
@@ -220,12 +212,11 @@ async def fetch_prop_ids_for_day(day_id: int) -> List[int]:
             ids.add(int(m.group(1)))
     return sorted(ids)
 
-#  Management command
 class Command(BaseCommand):
     help = "Scrape proposition-sidor: loopa över raceday-id, hämta prop-ids för dagen och skrapa dem."
 
-    DAY_START_ID = 610_200
-    DAY_END_ID   = 610_300
+    DAY_START_ID = 610_235
+    DAY_END_ID   = 610_305
 
     def handle(self, *args, **opts):
         base_prop = "https://sportapp.travsport.se/propositions/raceday/ts{}/proposition/ts{}"
