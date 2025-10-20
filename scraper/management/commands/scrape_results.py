@@ -149,8 +149,8 @@ async def scrape_page(url: str) -> List[Row]:
 class Command(BaseCommand):
     help = "Start id: 605_704"
 
-    START_ID = 610_230
-    END_ID   = 610_280
+    START_ID = 610_269
+    END_ID   = 610_330
 
     def handle(self, *args, **opts):
         base = "https://sportapp.travsport.se/race/raceday/ts{}/results/all"

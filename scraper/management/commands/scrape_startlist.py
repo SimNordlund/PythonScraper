@@ -38,7 +38,7 @@ FULLNAME_TO_BANKOD = {
     "OVIKEN":"Ov","ROMME":"Ro","RÄTTVIK":"Rä","SOLVALLA":"S","SKELLEFTEÅ":"Sk",
     "SOLÄNGET":"Sä","TINGSRYD":"Ti","TÄBY TRAV":"Tt","UMÅKER":"U","VEMDALEN":"Vd",
     "VAGGERYD":"Vg","VISBY":"Vi","ÅBY":"Å","ÅMÅL":"Åm","ÅRJÄNG":"År",
-    "ÖREBRO":"Ö","ÖSTERSUND":"Ös",
+    "ÖREBRO":"Ö","ÖSTERSUND":"Ös","BJÄRKE":"Bj",
 }
 FULLNAME_TO_BANKOD |= {_strip(k): v for k, v in FULLNAME_TO_BANKOD.items()}
 def track_to_bankod(n: str) -> str:
@@ -112,8 +112,8 @@ async def scrape_startlist(url: str) -> List[StartRow]:
 
 
 class Command(BaseCommand):
-    START_ID = 610_235
-    END_ID   = 610_350
+    START_ID = 610_270
+    END_ID   = 610_360
     help = "Scrape hard-coded ts-ID range into Startlista"
 
     def handle(self, *args, **kwargs):
