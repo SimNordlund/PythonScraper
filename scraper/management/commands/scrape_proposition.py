@@ -215,8 +215,8 @@ async def fetch_prop_ids_for_day(day_id: int) -> List[int]:
 class Command(BaseCommand):
     help = "Scrape proposition-sidor: loopa över raceday-id, hämta prop-ids för dagen och skrapa dem."
 
-    DAY_START_ID = 610_270
-    DAY_END_ID   = 610_330
+    DAY_START_ID = 610_290
+    DAY_END_ID   = 610_340
 
     def handle(self, *args, **opts):
         base_prop = "https://sportapp.travsport.se/propositions/raceday/ts{}/proposition/ts{}"
