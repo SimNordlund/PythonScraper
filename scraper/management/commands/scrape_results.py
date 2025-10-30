@@ -149,7 +149,7 @@ async def scrape_page(url: str) -> List[Row]:
 class Command(BaseCommand):
     help = "Scrape hard-coded ts-ID range into Result"
 
-    START_ID = 610_269
+    START_ID = 610_250
     END_ID   = 610_330
 
     def handle(self, *args, **opts):
