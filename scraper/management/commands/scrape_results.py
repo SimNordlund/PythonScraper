@@ -1,6 +1,6 @@
 import asyncio, re, unicodedata, logging
 from dataclasses import dataclass
-from typing import List
+from typing import List, Tuple, Optional  # //Changed!
 from playwright.async_api import async_playwright, Error as PlaywrightError
 from django.core.management.base import BaseCommand
 from scraper.models import HorseResult
@@ -32,14 +32,19 @@ def normalize_cell_text(s: str) -> str:  # //Changed!
         return ""  # //Changed!
     return s.replace("\u00a0", " ").strip()  # //Changed!
 
-def normalize_name(name: str) -> str:  # //Changed!
-    # Remove trailing/embedded * and normalize whitespace  # //Changed!
-    cleaned = normalize_cell_text(name).replace("*", "")  # //Changed!
-    return re.sub(r"\s+", " ", cleaned).strip()  # //Changed!
+def trim_to_max(s: str, max_len: int) -> str:  # //Changed!
+    s = s or ""  # //Changed!
+    return s if len(s) <= max_len else s[:max_len]  # //Changed!
 
+def normalize_name(name: str) -> str:  # //Changed!
+    # Remove * and normalize whitespace + trim to DB max length 50  # //Changed!
+    cleaned = normalize_cell_text(name).replace("*", "")  # //Changed!
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()  # //Changed!
+    return trim_to_max(cleaned, 50)  # //Changed!
 
 def normalize_kusk(kusk: str) -> str:  # //Changed!
-    return re.sub(r"\s+", " ", normalize_cell_text(kusk)).strip()[:80]  # //Changed!
+    cleaned = re.sub(r"\s+", " ", normalize_cell_text(kusk)).strip()  # //Changed!
+    return trim_to_max(cleaned, 80)  # //Changed!
 
 def sanitize_underlag(raw: str) -> str:  # //Changed!
     t = normalize_cell_text(raw).lower()  # //Changed!
@@ -51,8 +56,8 @@ def sanitize_underlag(raw: str) -> str:  # //Changed!
     return t[:2]  # //Changed!  # underlag max_length=2
 
 # Distans/spår kan komma i olika format, vi stödjer både:
-#  - "3/2140n" (vanligast här)
-#  - "2140:3" (Java popup-stil)
+#  - "3/2140n"
+#  - "2140:3"
 #  - "2140" (fallback -> spår=1)
 dist_slash_re = re.compile(r"^\s*(\d{1,2})\s*/\s*(\d{3,4})\s*([a-zA-Z() \u00a0]*)\s*$", re.I)  # //Changed!
 dist_colon_re = re.compile(r"^\s*(\d{3,4})\s*:\s*(\d{1,2})\s*$", re.I)  # //Changed!
@@ -161,6 +166,90 @@ def parse_tid_cell(raw: str):  # //Changed!
 
 
 # ---------------------------
+# Pris (per lopp) parsing
+# ---------------------------
+
+PRIS_LINE_RE = re.compile(r"\bPris\s*:\s*(.+?)\bkr\b", re.IGNORECASE | re.DOTALL)  # //Changed!
+PRISPLACERADE_RE = re.compile(r"\((\d+)\s*prisplacerade\)", re.IGNORECASE)  # //Changed!
+LAGST_RE = re.compile(r"Lägst\s+([0-9][0-9\.\s\u00a0]*)\s*kr", re.IGNORECASE)  # //Changed!
+
+def _parse_swe_int(token: str) -> Optional[int]:  # //Changed!
+    if token is None:  # //Changed!
+        return None  # //Changed!
+    t = normalize_cell_text(token)  # //Changed!
+    t = t.replace("(", "").replace(")", "")  # //Changed!
+    t = t.replace("\u00a0", " ")  # //Changed!
+    t = t.replace(".", "").replace(" ", "")  # //Changed!
+    t = re.sub(r"[^\d]", "", t)  # //Changed!
+    if not t:  # //Changed!
+        return None  # //Changed!
+    try:  # //Changed!
+        return int(t)  # //Changed!
+    except ValueError:  # //Changed!
+        return None  # //Changed!
+
+def parse_pris_text(full_text: str) -> Tuple[List[int], Optional[int], Optional[int]]:  # //Changed!
+    """
+    Returns (prislista, lagst_pris, prisplacerade_n)
+    - prislista: [35000, 17500, ...]
+    - lagst_pris: t.ex 1500 (om “Lägst 1.500 kr ...” finns)
+    - prisplacerade_n: t.ex 8 (om "(8 prisplacerade)" finns)
+    """  # //Changed!
+    text = normalize_cell_text(full_text)  # //Changed!
+    if not text:  # //Changed!
+        return [], None, None  # //Changed!
+
+    m = PRIS_LINE_RE.search(text)  # //Changed!
+    if not m:  # //Changed!
+        return [], _parse_swe_int(LAGST_RE.search(text).group(1)) if LAGST_RE.search(text) else None, None  # //Changed!
+
+    prize_part = normalize_cell_text(m.group(1))  # //Changed!
+
+    # split på '-' och plocka ut siffror (tillåt "(0)" också)
+    prizes: List[int] = []  # //Changed!
+    for raw_tok in prize_part.split("-"):  # //Changed!
+        v = _parse_swe_int(raw_tok)  # //Changed!
+        if v is None:  # //Changed!
+            continue  # //Changed!
+        prizes.append(v)  # //Changed!
+
+    # (X prisplacerade)
+    pn = None  # //Changed!
+    mp = PRISPLACERADE_RE.search(text)  # //Changed!
+    if mp:  # //Changed!
+        try:  # //Changed!
+            pn = int(mp.group(1))  # //Changed!
+        except ValueError:  # //Changed!
+            pn = None  # //Changed!
+
+    # Lägst Y kr
+    min_pris = None  # //Changed!
+    ml = LAGST_RE.search(text)  # //Changed!
+    if ml:  # //Changed!
+        min_pris = _parse_swe_int(ml.group(1))  # //Changed!
+
+    return prizes, min_pris, pn  # //Changed!
+
+def pris_for_placering(placering: Optional[int], prizes: List[int], min_pris: Optional[int]) -> int:  # //Changed!
+    if placering is None:  # //Changed!
+        return 0  # //Changed!
+    if placering == 99:  # //Changed!
+        return 0  # //Changed!
+    if placering <= 0:  # //Changed!
+        return 0  # //Changed!
+
+    if prizes:  # //Changed!
+        if placering <= len(prizes):  # //Changed!
+            return prizes[placering - 1]  # //Changed!
+        if min_pris is not None:  # //Changed!
+            return int(min_pris)  # //Changed!
+        return 0  # //Changed!
+
+    # ingen “Pris:” info -> default 0
+    return 0  # //Changed!
+
+
+# ---------------------------
 # Bankod mapping (oförändrat)
 # ---------------------------
 
@@ -208,12 +297,32 @@ class Row:
     startmetod: str
     galopp: str
     underlag: str
-    kusk: str  # //Changed!
+    kusk: str
+    pris: int  # //Changed!
 
 
 # ---------------------------
 # Scraper
 # ---------------------------
+
+async def _extract_pris_text_from_section(section) -> str:  # //Changed!
+    # Försök hitta raden med “Pris:” inne i lopp-sektionen  # //Changed!
+    try:  # //Changed!
+        loc = section.get_by_text(re.compile(r"\bPris\s*:", re.I))  # //Changed!
+        if await loc.count() > 0:  # //Changed!
+            return normalize_cell_text(await loc.first.inner_text())  # //Changed!
+    except Exception:  # //Changed!
+        pass  # //Changed!
+
+    try:  # //Changed!
+        loc = section.locator("xpath=.//*[contains(., 'Pris:') or contains(., 'PRIS:')]")  # //Changed!
+        if await loc.count() > 0:  # //Changed!
+            return normalize_cell_text(await loc.first.inner_text())  # //Changed!
+    except Exception:  # //Changed!
+        pass  # //Changed!
+
+    return ""  # //Changed!
+
 
 async def scrape_page(url: str) -> List[Row]:
     async with async_playwright() as p:
@@ -224,93 +333,97 @@ async def scrape_page(url: str) -> List[Row]:
 
         try:
             await page.goto(url, timeout=0)
-        except PlaywrightError:
-            await browser.close()
-            return []
-
-        try:
             await page.wait_for_selector("div[role='row'][data-rowindex]", timeout=10_000)
-        except PlaywrightError:
-            await browser.close()
-            return []
 
-        nav = page.locator("div[class*='RaceDayNavigator_title'] span")
-        if await nav.count() < 2:
-            await browser.close()
-            return []
+            nav = page.locator("div[class*='RaceDayNavigator_title'] span")
+            if await nav.count() < 2:
+                return []
 
-        track_raw = normalize_cell_text(await nav.nth(0).inner_text())
-        bankod = track_to_bankod(track_raw)
+            track_raw = normalize_cell_text(await nav.nth(0).inner_text())
+            bankod = track_to_bankod(track_raw)
 
-        date_txt = normalize_cell_text(await nav.nth(1).inner_text())
-        datum = int(swedish_date_to_yyyymmdd(date_txt))
+            date_txt = normalize_cell_text(await nav.nth(1).inner_text())
+            datum = int(swedish_date_to_yyyymmdd(date_txt))
 
-        data: List[Row] = []
-        lopp_headers = page.locator("//h2[starts-with(normalize-space(),'Lopp')]")
-        for i in range(await lopp_headers.count()):
-            header = lopp_headers.nth(i)
-            m = re.search(r"Lopp\s+(\d+)", normalize_cell_text(await header.inner_text()))
-            if not m:
-                continue
-            lopp = int(m.group(1))
+            data: List[Row] = []
+            lopp_headers = page.locator("//h2[starts-with(normalize-space(),'Lopp')]")
+            for i in range(await lopp_headers.count()):
+                header = lopp_headers.nth(i)
+                m = re.search(r"Lopp\s+(\d+)", normalize_cell_text(await header.inner_text()))
+                if not m:
+                    continue
+                lopp = int(m.group(1))
 
-            section = header.locator("xpath=ancestor::div[contains(@class,'MuiBox-root')][1]")
-            rows = await section.locator("div[role='row'][data-rowindex]").all()
-            if not rows:
-                continue
+                section = header.locator("xpath=ancestor::div[contains(@class,'MuiBox-root')][1]")
 
-            for row in rows:
-                cell = lambda f: row.locator(f"div[data-field='{f}']")
+                # //Changed! Prisinfo per lopp (läser “Pris: ...” texten)
+                pris_text = await _extract_pris_text_from_section(section)  # //Changed!
+                prizes, min_pris, _prisplacerade_n = parse_pris_text(pris_text)  # //Changed!
 
-                nr_txt = normalize_cell_text(await cell("horse").locator("div").first.inner_text())
-                nr_m = re.search(r"\d+", nr_txt)  # //Changed!
-                if not nr_m:  # //Changed!
-                    continue  # //Changed!
-                nr = int(nr_m.group(0))  # //Changed!
+                rows = await section.locator("div[role='row'][data-rowindex]").all()
+                if not rows:
+                    continue
 
-                namn_raw = normalize_cell_text(await cell("horse").locator("span").first.inner_text())
-                namn = normalize_name(namn_raw.split("(")[0])
+                for row in rows:
+                    cell = lambda f: row.locator(f"div[data-field='{f}']")
 
-                # Kusk (driver)
-                kusk = ""  # //Changed!
-                try:  # //Changed!
-                    drv = cell("driver")  # //Changed!
-                    a = drv.locator("a")  # //Changed!
-                    kusk_raw = (await a.first.inner_text()).strip() if await a.count() > 0 else normalize_cell_text(await drv.inner_text())  # //Changed!
-                    kusk = normalize_kusk(kusk_raw)  # //Changed!
-                except Exception:  # //Changed!
+                    nr_txt = normalize_cell_text(await cell("horse").locator("div").first.inner_text())
+                    nr_m = re.search(r"\d+", nr_txt)  # //Changed!
+                    if not nr_m:  # //Changed!
+                        continue  # //Changed!
+                    nr = int(nr_m.group(0))  # //Changed!
+
+                    namn_raw = normalize_cell_text(await cell("horse").locator("span").first.inner_text())
+                    namn = normalize_name(namn_raw.split("(")[0])  # //Changed! (inkl * bort + trim)
+
+                    # Kusk (driver)
                     kusk = ""  # //Changed!
+                    try:  # //Changed!
+                        drv = cell("driver")  # //Changed!
+                        a = drv.locator("a")  # //Changed!
+                        kusk_raw = (await a.first.inner_text()).strip() if await a.count() > 0 else normalize_cell_text(await drv.inner_text())  # //Changed!
+                        kusk = normalize_kusk(kusk_raw)  # //Changed!
+                    except Exception:  # //Changed!
+                        kusk = ""  # //Changed!
 
-                # Placering (Java-logik)
-                placetxt = normalize_cell_text(await cell("placementDisplay").inner_text())
-                placering = map_placering_value(placetxt)  # //Changed!
+                    # Placering (Java-logik)
+                    placetxt = normalize_cell_text(await cell("placementDisplay").inner_text())
+                    placering = map_placering_value(placetxt)  # //Changed!
 
-                # Distans/spår/underlag (robust + sanitize)
-                dist_raw = normalize_cell_text(await cell("startPositionAndDistance").inner_text())
-                distans, spar, underlag = parse_dist_spar(dist_raw)  # //Changed!
+                    # Distans/spår/underlag (robust + sanitize)
+                    dist_raw = normalize_cell_text(await cell("startPositionAndDistance").inner_text())
+                    distans, spar, underlag = parse_dist_spar(dist_raw)  # //Changed!
 
-                # Tid/startmetod/galopp (Java-logik)
-                tid_raw = normalize_cell_text(await cell("time").inner_text())
-                tid, startmetod, galopp = parse_tid_cell(tid_raw)  # //Changed!
+                    # Tid/startmetod/galopp (Java-logik)
+                    tid_raw = normalize_cell_text(await cell("time").inner_text())
+                    tid, startmetod, galopp = parse_tid_cell(tid_raw)  # //Changed!
 
-                data.append(Row(
-                    datum=datum,
-                    bankod=bankod,
-                    lopp=lopp,
-                    nr=nr,
-                    namn=namn,
-                    distans=distans,
-                    spar=spar,
-                    placering=placering,
-                    tid=tid,
-                    startmetod=startmetod,
-                    galopp=galopp,
-                    underlag=underlag,
-                    kusk=kusk,  # //Changed!
-                ))
+                    # //Changed! Pris per häst baserat på placering + loppets Pris-rad
+                    pris = pris_for_placering(placering, prizes, min_pris)  # //Changed!
 
-        await browser.close()
-        return data
+                    data.append(Row(
+                        datum=datum,
+                        bankod=bankod,
+                        lopp=lopp,
+                        nr=nr,
+                        namn=namn,
+                        distans=distans,
+                        spar=spar,
+                        placering=placering,
+                        tid=tid,
+                        startmetod=startmetod,
+                        galopp=galopp,
+                        underlag=underlag,
+                        kusk=kusk,
+                        pris=pris,  # //Changed!
+                    ))
+
+            return data
+
+        except PlaywrightError:
+            return []
+        finally:
+            await browser.close()
 
 
 # ---------------------------
@@ -342,7 +455,7 @@ class Command(BaseCommand):
                 continue
 
             for r in rows:
-                namn_clean = normalize_name(r.namn)
+                namn_clean = normalize_name(r.namn)  # //Changed!
 
                 HorseResult.objects.update_or_create(
                     datum=r.datum,
@@ -358,7 +471,8 @@ class Command(BaseCommand):
                         startmetod=r.startmetod,
                         galopp=r.galopp,
                         underlag=r.underlag,
-                        kusk=r.kusk,  # //Changed!
+                        kusk=r.kusk,
+                        pris=r.pris,  # //Changed!
                     ),
                 )
 
