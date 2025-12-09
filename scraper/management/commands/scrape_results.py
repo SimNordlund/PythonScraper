@@ -16,9 +16,9 @@ SWEDISH_MONTH = {
 
 def swedish_date_to_yyyymmdd(text: str) -> str:
     parts = text.strip().upper().split()
-    if len(parts) == 4:        
+    if len(parts) == 4:
         _, d, m, y = parts
-    else:                    
+    else:
         d, m, y = parts
     return f"{int(y):04d}{SWEDISH_MONTH[m]:02d}{int(d):02d}"
 
@@ -44,6 +44,11 @@ def parse_tid_block(txt: str):
     tid = float(m[1].replace(",", "."))
     flags = m[2].lower()
     return tid, ("a" if "a" in flags else ""), ("g" if "g" in flags else "")
+
+
+def normalize_name(name: str) -> str:  # //Changed!
+    # Travsidor kan ha konstiga mellanslag, detta gör namnet stabilt som nyckel  # //Changed!
+    return re.sub(r"\s+", " ", (name or "").replace("\u00a0", " ")).strip()  # //Changed!
 
 
 FULLNAME_TO_BANKOD = {
@@ -82,26 +87,31 @@ class Row:
 async def scrape_page(url: str) -> List[Row]:
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        ctx = await browser.new_context(); ctx.set_default_timeout(120_000)
+        ctx = await browser.new_context()
+        ctx.set_default_timeout(120_000)
         page = await ctx.new_page()
+
         try:
             await page.goto(url, timeout=0)
         except PlaywrightError:
-            await browser.close(); return []
+            await browser.close()
+            return []
 
-        try:  
-            await page.wait_for_selector("div[role='row'][data-rowindex]", timeout=10_000)  
-        except PlaywrightError:  
-            await browser.close(); return []  
+        try:
+            await page.wait_for_selector("div[role='row'][data-rowindex]", timeout=10_000)
+        except PlaywrightError:
+            await browser.close()
+            return []
 
         nav = page.locator("div[class*='RaceDayNavigator_title'] span")
         if await nav.count() < 2:
-            await browser.close(); return []
+            await browser.close()
+            return []
 
         track_raw = (await nav.nth(0).inner_text()).strip()
-        bankod    = track_to_bankod(track_raw)
-        date_txt  = (await nav.nth(1).inner_text()).strip()
-        datum     = int(swedish_date_to_yyyymmdd(date_txt))
+        bankod = track_to_bankod(track_raw)
+        date_txt = (await nav.nth(1).inner_text()).strip()
+        datum = int(swedish_date_to_yyyymmdd(date_txt))
 
         data: List[Row] = []
         lopp_headers = page.locator("//h2[starts-with(normalize-space(),'Lopp')]")
@@ -112,21 +122,19 @@ async def scrape_page(url: str) -> List[Row]:
                 continue
             lopp = int(m[1])
 
-            section = header.locator(
-                "xpath=ancestor::div[contains(@class,'MuiBox-root')][1]"
-            )
+            section = header.locator("xpath=ancestor::div[contains(@class,'MuiBox-root')][1]")
             rows = await section.locator("div[role='row'][data-rowindex]").all()
             if not rows:
                 continue
 
             for row in rows:
                 cell = lambda f: row.locator(f"div[data-field='{f}']")
-                nr = int(re.match(
-                    r"\d+",
-                    (await cell("horse").locator("div").first.inner_text()).strip()
-                )[0])
-                namn = (await cell("horse").locator("span").first.inner_text())\
-                       .split("(")[0].strip()
+
+                nr_txt = (await cell("horse").locator("div").first.inner_text()).strip()
+                nr = int(re.match(r"\d+", nr_txt)[0])
+
+                namn_raw = (await cell("horse").locator("span").first.inner_text())
+                namn = normalize_name(namn_raw.split("(")[0])  # //Changed!
 
                 placetxt = (await cell("placementDisplay").inner_text()).strip()
                 placering = int(placetxt) if placetxt.isdigit() else None
@@ -146,11 +154,12 @@ async def scrape_page(url: str) -> List[Row]:
         await browser.close()
         return data
 
+
 class Command(BaseCommand):
     help = "Scrape hard-coded ts-ID range into Result"
 
     START_ID = 610_355
-    END_ID   = 610_420
+    END_ID = 610_420
 
     def handle(self, *args, **opts):
         base = "https://sportapp.travsport.se/race/raceday/ts{}/results/all"
@@ -171,19 +180,22 @@ class Command(BaseCommand):
                 continue
 
             for r in rows:
+                namn_clean = normalize_name(r.namn)  # //Changed!
+
                 HorseResult.objects.update_or_create(
-                    datum=r.datum, bankod=r.bankod, lopp=r.lopp, nr=r.nr,
+                    datum=r.datum, bankod=r.bankod, lopp=r.lopp, namn=namn_clean,  # //Changed!
                     defaults=dict(
-                        namn       = r.namn,
-                        distans    = r.distans,
-                        spar       = r.spar,
-                        placering  = r.placering,
-                        tid        = r.tid,
-                        startmetod = r.startmetod,
-                        galopp     = r.galopp,
-                        underlag   = r.underlag,
+                        nr=r.nr,  # //Changed!
+                        distans=r.distans,
+                        spar=r.spar,
+                        placering=r.placering,
+                        tid=r.tid,
+                        startmetod=r.startmetod,
+                        galopp=r.galopp,
+                        underlag=r.underlag,
                     ),
                 )
+
             total += len(rows)
             logging.info("  inserted/updated %d rows", len(rows))
 

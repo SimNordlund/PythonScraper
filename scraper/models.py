@@ -36,11 +36,13 @@ class HorseResult(models.Model):
 
     class Meta:
         db_table = "resultat"
-        unique_together = ("datum", "bankod", "lopp", "nr")
-        ordering = ("datum", "bankod", "lopp", "placering")
-
-    def __str__(self):
-        return f"{self.datum} L{self.lopp} #{self.nr} {self.namn}"
+        constraints = [  # //Changed!
+            models.UniqueConstraint(  # //Changed!
+                fields=("datum", "bankod", "lopp", "namn"),  # //Changed!
+                name="uq_resultat_datum_bankod_lopp_namn",  # //Changed!
+            ),
+        ]
+        ordering = ("datum", "bankod", "lopp", "placering")  # //Changed!
 
 
 class StartList(models.Model):
