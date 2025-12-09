@@ -50,6 +50,9 @@ def normalize_name(name: str) -> str:  # //Changed!
     # Travsidor kan ha konstiga mellanslag, detta gör namnet stabilt som nyckel  # //Changed!
     return re.sub(r"\s+", " ", (name or "").replace("\u00a0", " ")).strip()  # //Changed!
 
+def normalize_kusk(kusk: str) -> str:  # //Changed!
+    return re.sub(r"\s+", " ", (kusk or "").replace("\u00a0", " ")).strip()[:80]  # //Changed!
+
 
 FULLNAME_TO_BANKOD = {
     "ARVIKA": "Ar",  "AXEVALLA": "Ax",  "BERGSÅKER": "B",  "BODEN": "Bo",
@@ -82,6 +85,7 @@ class Row:
     datum: int; bankod: str; lopp: int; nr: int; namn: str
     distans: int | None; spar: int | None; placering: int | None
     tid: float | None; startmetod: str; galopp: str; underlag: str
+    kusk: str  # //Changed!
 
 
 async def scrape_page(url: str) -> List[Row]:
@@ -136,6 +140,16 @@ async def scrape_page(url: str) -> List[Row]:
                 namn_raw = (await cell("horse").locator("span").first.inner_text())
                 namn = normalize_name(namn_raw.split("(")[0])  # //Changed!
 
+                # //Changed! Kusk (driver)
+                kusk = ""  # //Changed!
+                try:  # //Changed!
+                    drv = cell("driver")  # //Changed!
+                    a = drv.locator("a")  # //Changed!
+                    kusk_raw = (await a.first.inner_text()).strip() if await a.count() > 0 else (await drv.inner_text()).strip()  # //Changed!
+                    kusk = normalize_kusk(kusk_raw)  # //Changed!
+                except Exception:  # //Changed!
+                    kusk = ""  # //Changed!
+
                 placetxt = (await cell("placementDisplay").inner_text()).strip()
                 placering = int(placetxt) if placetxt.isdigit() else None
 
@@ -148,7 +162,8 @@ async def scrape_page(url: str) -> List[Row]:
                 data.append(Row(
                     datum, bankod, lopp, nr, namn,
                     distans, spar, placering, tid,
-                    startmetod, galopp, underlag
+                    startmetod, galopp, underlag,
+                    kusk  # //Changed!
                 ))
 
         await browser.close()
@@ -193,6 +208,7 @@ class Command(BaseCommand):
                         startmetod=r.startmetod,
                         galopp=r.galopp,
                         underlag=r.underlag,
+                        kusk=r.kusk,  # //Changed!
                     ),
                 )
 

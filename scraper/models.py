@@ -4,7 +4,7 @@ class HorseResult(models.Model):
     id = models.BigAutoField(primary_key=True)
 
     datum   = models.IntegerField(db_column="datum")
-    bankod  = models.CharField(max_length=2, db_column="bankod")
+    bankod  = models.CharField(max_length=20, db_column="bankod")
     lopp    = models.IntegerField(db_column="lopp")
     nr      = models.IntegerField(db_column="nr")
     namn    = models.CharField(max_length=50, db_column="namn")
@@ -17,7 +17,7 @@ class HorseResult(models.Model):
     tid         = models.FloatField(null=True, blank=True, db_column="tid")
     startmetod  = models.CharField(max_length=1, blank=True, db_column="startmetod")
     galopp      = models.CharField(max_length=1, blank=True, db_column="galopp")
-    underlag    = models.CharField(max_length=1, blank=True, db_column="underlag")
+    underlag    = models.CharField(max_length=2, blank=True, db_column="underlag")
 
     ny_tid      = models.FloatField(null=True, blank=True, db_column="nytid")
     diff_tid    = models.FloatField(null=True, blank=True, db_column="difftid")
@@ -33,6 +33,9 @@ class HorseResult(models.Model):
     sortering_pris   = models.IntegerField(null=True, blank=True, db_column="sorteringpris")
     sortering_klass  = models.IntegerField(null=True, blank=True, db_column="sorteringklass")
     lopp_klass       = models.FloatField(null=True, blank=True, db_column="loppklass")
+    
+    odds = models.IntegerField(db_column="odds", default=999) 
+    kusk = models.CharField(max_length=80, db_column="kusk", blank=True, default="")
 
     class Meta:
         db_table = "resultat"
