@@ -23,7 +23,7 @@ def swedish_date_to_yyyymmdd(txt: str) -> str:
 
 
 # ---------------------------
-# Normalisering (samma tänk som resultat-scrapern)
+# Normalisering
 # ---------------------------
 
 def normalize_cell_text(s: str) -> str:  # //Changed!
@@ -35,11 +35,21 @@ def trim_to_max(s: str, max_len: int) -> str:  # //Changed!
     s = s or ""  # //Changed!
     return s if len(s) <= max_len else s[:max_len]  # //Changed!
 
-def normalize_name(name: str) -> str:  # //Changed!
+_paren_re = re.compile(r"\([^)]*\)")  # //Changed!
+
+def normalize_startlista_name(name: str) -> str:  # //Changed!
     cleaned = normalize_cell_text(name)  # //Changed!
+
     cleaned = cleaned.replace("*", "")  # //Changed!
-    cleaned = cleaned.split("(", 1)[0]  # //Changed!
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()  # //Changed!
+    cleaned = cleaned.replace("'", "").replace("’", "")  # //Changed! (både ' och ’)
+    cleaned = _paren_re.sub("", cleaned)  # //Changed! (ta bort parentes + innehåll)
+
+    if len(cleaned) >= 7:  # //Changed!
+        cleaned = cleaned[:-7]  # //Changed! (ta bort sista 7 tecken)
+
+    cleaned = cleaned.rstrip()  # //Changed! (trim i slutet)
+    cleaned = cleaned.upper()  # //Changed! (UPPERCASE)
+
     return trim_to_max(cleaned, 50)  # //Changed!
 
 def normalize_kusk(kusk: str, max_len: int) -> str:  # //Changed!
@@ -165,7 +175,7 @@ async def scrape_startlist(url: str) -> List[StartRow]:
                 nr = int(nr_m.group(0))  # //Changed!
 
                 namn_raw = normalize_cell_text(await cell("horse").locator("span").first.inner_text())  # //Changed!
-                namn = normalize_name(namn_raw)  # //Changed!
+                namn = normalize_startlista_name(namn_raw)  # //Changed!
 
                 kusk_raw = normalize_cell_text(await cell("driver").inner_text())  # //Changed!
                 kusk = normalize_kusk(kusk_raw, 120)  # //Changed! (startlista max 120)
@@ -197,7 +207,7 @@ def _today_yyyymmdd() -> int:  # //Changed!
     return d.year * 10000 + d.month * 100 + d.day  # //Changed!
 
 def upsert_resultat_from_startrow(r: StartRow):  # //Changed!
-    namn_clean = normalize_name(r.namn)  # //Changed!
+    namn_clean = r.namn  # //Changed! (viktigt: normalisera INTE igen, annars tas sista 7 tecken bort två gånger)
     kusk_res = normalize_kusk(r.kusk, 80)  # //Changed! (resultat max 80)
 
     obj, created = HorseResult.objects.get_or_create(  # //Changed!
@@ -276,7 +286,7 @@ class Command(BaseCommand):
                     lopp=r.lopp,
                     nr=r.nr,
                     defaults=dict(
-                        namn=normalize_name(r.namn),  # //Changed!
+                        namn=r.namn,  # //Changed! (inte normalisera igen)
                         spar=r.spar,
                         distans=r.distans,
                         kusk=normalize_kusk(r.kusk, 120),  # //Changed!

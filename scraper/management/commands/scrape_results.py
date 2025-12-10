@@ -1,8 +1,9 @@
 import asyncio, re, unicodedata, logging
 from dataclasses import dataclass
 from typing import List, Tuple, Optional  # //Changed!
-from playwright.async_api import async_playwright, Error as PlaywrightError
 from django.core.management.base import BaseCommand
+from django.db import IntegrityError  # //Changed!
+from playwright.async_api import async_playwright, Error as PlaywrightError
 from scraper.models import HorseResult
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -15,7 +16,7 @@ SWEDISH_MONTH = {
 }
 
 def swedish_date_to_yyyymmdd(text: str) -> str:
-    parts = text.strip().upper().split()
+    parts = (text or "").strip().upper().split()  # //Changed!
     if len(parts) == 4:
         _, d, m, y = parts
     else:
@@ -24,7 +25,7 @@ def swedish_date_to_yyyymmdd(text: str) -> str:
 
 
 # ---------------------------
-# Normalisering / parsing (Java-logik portad)
+# Normalisering / parsing (som din “old commit”)
 # ---------------------------
 
 def normalize_cell_text(s: str) -> str:  # //Changed!
@@ -37,7 +38,6 @@ def trim_to_max(s: str, max_len: int) -> str:  # //Changed!
     return s if len(s) <= max_len else s[:max_len]  # //Changed!
 
 def normalize_name(name: str) -> str:  # //Changed!
-    # Remove * and normalize whitespace + trim to DB max length 50  # //Changed!
     cleaned = normalize_cell_text(name).replace("*", "")  # //Changed!
     cleaned = re.sub(r"\s+", " ", cleaned).strip()  # //Changed!
     return trim_to_max(cleaned, 50)  # //Changed!
@@ -53,7 +53,7 @@ def sanitize_underlag(raw: str) -> str:  # //Changed!
     t = t.replace("(", "").replace(")", "")  # //Changed!
     t = re.sub(r"\s+", "", t)  # //Changed!
     t = re.sub(r"[^a-z]", "", t)  # //Changed!
-    return t[:2]  # //Changed!  # underlag max_length=2
+    return t[:2]  # //Changed!
 
 
 dist_slash_re = re.compile(r"^\s*(\d{1,2})\s*/\s*(\d{3,4})\s*([a-zA-Z() \u00a0]*)\s*$", re.I)  # //Changed!
@@ -61,12 +61,6 @@ dist_colon_re = re.compile(r"^\s*(\d{3,4})\s*:\s*(\d{1,2})\s*$", re.I)  # //Chan
 dist_only_re = re.compile(r"^\s*(\d{3,4})\s*(?:m)?\s*$", re.I)  # //Changed!
 
 def parse_dist_spar(txt: str):  # //Changed!
-    """
-    Returns (distans, spar, underlag)
-    "3/2140n" -> (2140, 3, "n")
-    "2140:3"  -> (2140, 3, "")
-    "2140"    -> (2140, 1, "")
-    """  # //Changed!
     t = normalize_cell_text(txt)  # //Changed!
     if not t:  # //Changed!
         return None, None, ""  # //Changed!
@@ -87,7 +81,7 @@ def parse_dist_spar(txt: str):  # //Changed!
     m = dist_only_re.match(t)  # //Changed!
     if m:  # //Changed!
         distans = int(m.group(1))  # //Changed!
-        return distans, 1, ""  # //Changed!  # Java-fallback: spår=1
+        return distans, 1, ""  # //Changed!
 
     return None, None, ""  # //Changed!
 
@@ -161,7 +155,7 @@ def parse_tid_cell(raw: str):  # //Changed!
 
 
 # ---------------------------
-# Pris (per lopp) parsing
+# Pris
 # ---------------------------
 
 PRIS_LINE_RE = re.compile(r"\bPris\s*:\s*(.+?)\bkr\b", re.IGNORECASE | re.DOTALL)  # //Changed!
@@ -217,25 +211,18 @@ def parse_pris_text(full_text: str) -> Tuple[List[int], Optional[int], Optional[
     return prizes, min_pris, pn  # //Changed!
 
 def pris_for_placering(placering: Optional[int], prizes: List[int], min_pris: Optional[int]) -> int:  # //Changed!
-    if placering is None:  # //Changed!
+    if placering is None or placering == 99 or placering <= 0:  # //Changed!
         return 0  # //Changed!
-    if placering == 99:  # //Changed!
-        return 0  # //Changed!
-    if placering <= 0:  # //Changed!
-        return 0  # //Changed!
-
     if prizes:  # //Changed!
         if placering <= len(prizes):  # //Changed!
             return prizes[placering - 1]  # //Changed!
         if min_pris is not None:  # //Changed!
             return int(min_pris)  # //Changed!
-        return 0  # //Changed!
-
     return 0  # //Changed!
 
 
 # ---------------------------
-# Bankod mapping (oförändrat)
+# Bankod
 # ---------------------------
 
 FULLNAME_TO_BANKOD = {
@@ -283,12 +270,12 @@ class Row:
     galopp: str
     underlag: str
     kusk: str
-    pris: int  # //Changed!
-    odds: Optional[int] = None  # //Changed! (kan vara None om ej hittas)
+    pris: int
+    odds: Optional[int] = None
 
 
 # ---------------------------
-# Scraper
+# Scrape one page (async)
 # ---------------------------
 
 async def _extract_pris_text_from_section(section) -> str:  # //Changed!
@@ -308,112 +295,252 @@ async def _extract_pris_text_from_section(section) -> str:  # //Changed!
 
     return ""  # //Changed!
 
+async def scrape_page(page, url: str) -> List[Row]:  # //Changed!
+    logging.info("  goto %s", url)  # //Changed!
+    await page.goto(url, timeout=60_000, wait_until="domcontentloaded")  # //Changed!
+    logging.info("  landed %s", page.url)
 
-async def scrape_page(url: str) -> List[Row]:
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        ctx = await browser.new_context()
-        ctx.set_default_timeout(120_000)
-        page = await ctx.new_page()
+    logging.info("  waiting for grid...")  # //Changed!
+    await page.wait_for_selector("div[role='row'][data-rowindex]", timeout=15_000)  # //Changed!
+    logging.info("  grid found")  # //Changed!
 
-        try:
-            await page.goto(url, timeout=0)
-            await page.wait_for_selector("div[role='row'][data-rowindex]", timeout=10_000)
+    nav = page.locator("div[class*='RaceDayNavigator_title'] span")
+    if await nav.count() < 2:
+        return []
 
-            nav = page.locator("div[class*='RaceDayNavigator_title'] span")
-            if await nav.count() < 2:
-                return []
+    track_raw = normalize_cell_text(await nav.nth(0).inner_text())
+    bankod = track_to_bankod(track_raw)
 
-            track_raw = normalize_cell_text(await nav.nth(0).inner_text())
-            bankod = track_to_bankod(track_raw)
+    date_txt = normalize_cell_text(await nav.nth(1).inner_text())
+    datum = int(swedish_date_to_yyyymmdd(date_txt))
 
-            date_txt = normalize_cell_text(await nav.nth(1).inner_text())
-            datum = int(swedish_date_to_yyyymmdd(date_txt))
+    data: List[Row] = []
+    lopp_headers = page.locator("//h2[starts-with(normalize-space(),'Lopp')]")
+    header_count = await lopp_headers.count()
+    logging.info("  found %d lopp headers", header_count)  # //Changed!
 
-            data: List[Row] = []
-            lopp_headers = page.locator("//h2[starts-with(normalize-space(),'Lopp')]")
-            for i in range(await lopp_headers.count()):
-                header = lopp_headers.nth(i)
-                m = re.search(r"Lopp\s+(\d+)", normalize_cell_text(await header.inner_text()))
-                if not m:
-                    continue
-                lopp = int(m.group(1))
+    for i in range(header_count):
+        header = lopp_headers.nth(i)
+        await header.scroll_into_view_if_needed()  # //Changed!
+        m = re.search(r"Lopp\s+(\d+)", normalize_cell_text(await header.inner_text()))
+        if not m:
+            continue
+        lopp = int(m.group(1))
 
-                section = header.locator("xpath=ancestor::div[contains(@class,'MuiBox-root')][1]")
+        section = header.locator("xpath=ancestor::div[contains(@class,'MuiBox-root')][1]")
 
-                pris_text = await _extract_pris_text_from_section(section)  # //Changed!
-                prizes, min_pris, _prisplacerade_n = parse_pris_text(pris_text)  # //Changed!
+        pris_text = await _extract_pris_text_from_section(section)  # //Changed!
+        prizes, min_pris, _ = parse_pris_text(pris_text)  # //Changed!
 
-                rows = await section.locator("div[role='row'][data-rowindex]").all()
+        rows = await section.locator("div[role='row'][data-rowindex]").all()
+        if not rows:
+            continue
+
+        for row in rows:
+            cell = lambda f: row.locator(f"div[data-field='{f}']")
+
+            nr_txt = normalize_cell_text(await cell("horse").locator("div").first.inner_text())
+            nr_m = re.search(r"\d+", nr_txt)
+            if not nr_m:
+                continue
+            nr = int(nr_m.group(0))
+
+            namn_raw = normalize_cell_text(await cell("horse").locator("span").first.inner_text())
+            namn = normalize_name(namn_raw.split("(")[0])  # //Changed!
+
+            kusk = ""
+            try:
+                drv = cell("driver")
+                a = drv.locator("a")
+                kusk_raw = (await a.first.inner_text()).strip() if await a.count() > 0 else normalize_cell_text(await drv.inner_text())
+                kusk = normalize_kusk(kusk_raw)
+            except Exception:
+                kusk = ""
+
+            placetxt = normalize_cell_text(await cell("placementDisplay").inner_text())
+            placering = map_placering_value(placetxt)
+
+            dist_raw = normalize_cell_text(await cell("startPositionAndDistance").inner_text())
+            distans, spar, underlag = parse_dist_spar(dist_raw)
+
+            tid_raw = normalize_cell_text(await cell("time").inner_text())
+            tid, startmetod, galopp = parse_tid_cell(tid_raw)
+
+            pris = pris_for_placering(placering, prizes, min_pris)
+
+            odds = None  # //Changed!
+            try:  # //Changed!
+                odds_cell = cell("odds")  # //Changed!
+                if await odds_cell.count() > 0:  # //Changed!
+                    odds_txt = normalize_cell_text(await odds_cell.inner_text())  # //Changed!
+                    mm = re.search(r"\d+", odds_txt)  # //Changed!
+                    if mm:  # //Changed!
+                        odds = int(mm.group(0))  # //Changed!
+            except Exception:  # //Changed!
+                odds = None  # //Changed!
+
+            data.append(Row(
+                datum=datum,
+                bankod=bankod,
+                lopp=lopp,
+                nr=nr,
+                namn=namn,
+                distans=distans,
+                spar=spar,
+                placering=placering,
+                tid=tid,
+                startmetod=startmetod,
+                galopp=galopp,
+                underlag=underlag,
+                kusk=kusk,
+                pris=pris,
+                odds=odds,
+            ))
+
+    return data
+
+
+# ---------------------------
+# DB write (sync) - körs i thread
+# ---------------------------
+
+def write_rows_to_db(rows: List[Row]) -> int:  # //Changed!
+    created_n = 0  # //Changed!
+    updated_n = 0  # //Changed!
+    unchanged_n = 0  # //Changed!
+
+    for r in rows:  # //Changed!
+        namn_clean = normalize_name(r.namn)  # //Changed!
+
+        try:  # //Changed!
+            obj, created = HorseResult.objects.get_or_create(  # //Changed!
+                datum=r.datum,
+                bankod=r.bankod,
+                lopp=r.lopp,
+                namn=namn_clean,
+                defaults=dict(
+                    nr=r.nr,
+                    distans=r.distans,
+                    spar=r.spar,
+                    placering=r.placering,
+                    tid=r.tid,
+                    startmetod=r.startmetod,
+                    galopp=r.galopp,
+                    underlag=r.underlag,
+                    kusk=r.kusk,
+                    pris=r.pris,
+                    odds=(r.odds if (r.odds not in (None, 999)) else 999),
+                ),
+            )
+        except IntegrityError as e:  # //Changed!
+            logging.exception("DB IntegrityError for (%s,%s,L%s,%s): %s", r.datum, r.bankod, r.lopp, namn_clean, e)  # //Changed!
+            continue  # //Changed!
+
+        if created:  # //Changed!
+            created_n += 1  # //Changed!
+            continue  # //Changed!
+
+        changed_fields = []  # //Changed!
+
+        if obj.nr != r.nr:
+            obj.nr = r.nr
+            changed_fields.append("nr")
+
+        if obj.distans != r.distans:
+            obj.distans = r.distans
+            changed_fields.append("distans")
+
+        if obj.spar != r.spar:
+            obj.spar = r.spar
+            changed_fields.append("spar")
+
+        if obj.placering != r.placering:
+            obj.placering = r.placering
+            changed_fields.append("placering")
+
+        if obj.tid != r.tid:
+            obj.tid = r.tid
+            changed_fields.append("tid")
+
+        if obj.startmetod != (r.startmetod or ""):
+            obj.startmetod = (r.startmetod or "")
+            changed_fields.append("startmetod")
+
+        if obj.galopp != (r.galopp or ""):
+            obj.galopp = (r.galopp or "")
+            changed_fields.append("galopp")
+
+        if obj.underlag != (r.underlag or ""):
+            obj.underlag = (r.underlag or "")
+            changed_fields.append("underlag")
+
+        if obj.kusk != (r.kusk or ""):
+            obj.kusk = (r.kusk or "")
+            changed_fields.append("kusk")
+
+        if obj.pris != r.pris:
+            obj.pris = r.pris
+            changed_fields.append("pris")
+
+        incoming_odds = r.odds
+        existing_odds = obj.odds if obj.odds is not None else 999
+        if incoming_odds not in (None, 999) and existing_odds == 999:
+            if obj.odds != int(incoming_odds):
+                obj.odds = int(incoming_odds)
+                changed_fields.append("odds")
+
+        if changed_fields:
+            obj.save(update_fields=changed_fields)
+            updated_n += 1
+        else:
+            unchanged_n += 1
+
+    logging.info("  db_created=%d db_updated=%d db_unchanged=%d", created_n, updated_n, unchanged_n)  # //Changed!
+    return created_n + updated_n  # //Changed!
+
+
+# ---------------------------
+# Main async runner
+# ---------------------------
+
+async def run_range(start_id: int, end_id: int) -> int:  # //Changed!
+    base = "https://sportapp.travsport.se/race/raceday/ts{}/results/all"  # //Changed!
+    total_scraped = 0  # //Changed!
+
+    async with async_playwright() as p:  # //Changed!
+        browser = await p.chromium.launch(headless=True)  # //Changed!
+        ctx = await browser.new_context()  # //Changed!
+        ctx.set_default_timeout(120_000)  # //Changed!
+        page = await ctx.new_page()  # //Changed!
+
+        try:  # //Changed!
+            for ts_id in range(start_id, end_id + 1):  # //Changed!
+                url = base.format(ts_id)  # //Changed!
+                logging.info("Scraping %s", url)  # //Changed!
+
+                try:  # //Changed!
+                    rows = await scrape_page(page, url)  # //Changed!
+                except PlaywrightError as exc:  # //Changed!
+                    logging.warning("  failed: %s", exc)  # //Changed!
+                    continue  # //Changed!
+                except Exception as exc:  # //Changed!
+                    logging.warning("  failed: %s", exc)  # //Changed!
+                    continue  # //Changed!
+
+                logging.info("  scraped_rows=%d", len(rows))  # //Changed!
                 if not rows:
                     continue
 
-                for row in rows:
-                    cell = lambda f: row.locator(f"div[data-field='{f}']")
+                total_scraped += len(rows)  # //Changed!
 
-                    nr_txt = normalize_cell_text(await cell("horse").locator("div").first.inner_text())
-                    nr_m = re.search(r"\d+", nr_txt)  # //Changed!
-                    if not nr_m:  # //Changed!
-                        continue  # //Changed!
-                    nr = int(nr_m.group(0))  # //Changed!
+                # //Changed! Django ORM körs synkront i en thread för att undvika SynchronousOnlyOperation
+                await asyncio.to_thread(write_rows_to_db, rows)  # //Changed!
 
-                    namn_raw = normalize_cell_text(await cell("horse").locator("span").first.inner_text())
-                    namn = normalize_name(namn_raw.split("(")[0])  # //Changed!
+        finally:  # //Changed!
+            await ctx.close()  # //Changed!
+            await browser.close()  # //Changed!
 
-                    kusk = ""  # //Changed!
-                    try:  # //Changed!
-                        drv = cell("driver")  # //Changed!
-                        a = drv.locator("a")  # //Changed!
-                        kusk_raw = (await a.first.inner_text()).strip() if await a.count() > 0 else normalize_cell_text(await drv.inner_text())  # //Changed!
-                        kusk = normalize_kusk(kusk_raw)  # //Changed!
-                    except Exception:  # //Changed!
-                        kusk = ""  # //Changed!
-
-                    placetxt = normalize_cell_text(await cell("placementDisplay").inner_text())
-                    placering = map_placering_value(placetxt)  # //Changed!
-
-                    dist_raw = normalize_cell_text(await cell("startPositionAndDistance").inner_text())
-                    distans, spar, underlag = parse_dist_spar(dist_raw)  # //Changed!
-
-                    tid_raw = normalize_cell_text(await cell("time").inner_text())
-                    tid, startmetod, galopp = parse_tid_cell(tid_raw)  # //Changed!
-
-                    pris = pris_for_placering(placering, prizes, min_pris)  # //Changed!
-
-                    # //Changed! Odds (valfritt): försök läsa om fältet finns, annars None
-                    odds = None  # //Changed!
-                    try:  # //Changed!
-                        odds_txt = normalize_cell_text(await cell("odds").inner_text())  # //Changed!
-                        mm = re.search(r"\d+", odds_txt)  # //Changed!
-                        if mm:  # //Changed!
-                            odds = int(mm.group(0))  # //Changed!
-                    except Exception:  # //Changed!
-                        odds = None  # //Changed!
-
-                    data.append(Row(
-                        datum=datum,
-                        bankod=bankod,
-                        lopp=lopp,
-                        nr=nr,
-                        namn=namn,
-                        distans=distans,
-                        spar=spar,
-                        placering=placering,
-                        tid=tid,
-                        startmetod=startmetod,
-                        galopp=galopp,
-                        underlag=underlag,
-                        kusk=kusk,
-                        pris=pris,  # //Changed!
-                        odds=odds,  # //Changed!
-                    ))
-
-            return data
-
-        except PlaywrightError:
-            return []
-        finally:
-            await browser.close()
+    return total_scraped  # //Changed!
 
 
 # ---------------------------
@@ -423,109 +550,9 @@ async def scrape_page(url: str) -> List[Row]:
 class Command(BaseCommand):
     help = "Scrape hard-coded ts-ID range into Result"
 
-    START_ID = 610_355
+    START_ID = 610_375
     END_ID = 610_420
 
     def handle(self, *args, **opts):
-        base = "https://sportapp.travsport.se/race/raceday/ts{}/results/all"
-        total = 0
-
-        for ts_id in range(self.START_ID, self.END_ID + 1):
-            url = base.format(ts_id)
-            logging.info("Scraping %s", url)
-
-            try:
-                rows = asyncio.run(scrape_page(url))
-            except Exception as exc:
-                logging.warning("  failed: %s", exc)
-                continue
-
-            if not rows:
-                logging.info("  no rows")
-                continue
-
-            for r in rows:
-                namn_clean = normalize_name(r.namn)  # //Changed!
-
-                # //Changed! get_or_create + selektiv uppdatering så vi kan skydda odds
-                obj, created = HorseResult.objects.get_or_create(  # //Changed!
-                    datum=r.datum,
-                    bankod=r.bankod,
-                    lopp=r.lopp,
-                    namn=namn_clean,
-                    defaults=dict(
-                        nr=r.nr,
-                        distans=r.distans,
-                        spar=r.spar,
-                        placering=r.placering,
-                        tid=r.tid,
-                        startmetod=r.startmetod,
-                        galopp=r.galopp,
-                        underlag=r.underlag,
-                        kusk=r.kusk,
-                        pris=r.pris,  # //Changed!
-                        odds=(r.odds if (r.odds not in (None, 999)) else 999),  # //Changed!
-                    ),
-                )  # //Changed!
-
-                if created:  # //Changed!
-                    continue  # //Changed!
-
-                changed_fields = []  # //Changed!
-
-                # //Changed! Uppdatera allt som vanligt (som update_or_create hade gjort)
-                if obj.nr != r.nr:  # //Changed!
-                    obj.nr = r.nr  # //Changed!
-                    changed_fields.append("nr")  # //Changed!
-
-                if obj.distans != r.distans:  # //Changed!
-                    obj.distans = r.distans  # //Changed!
-                    changed_fields.append("distans")  # //Changed!
-
-                if obj.spar != r.spar:  # //Changed!
-                    obj.spar = r.spar  # //Changed!
-                    changed_fields.append("spar")  # //Changed!
-
-                if obj.placering != r.placering:  # //Changed!
-                    obj.placering = r.placering  # //Changed!
-                    changed_fields.append("placering")  # //Changed!
-
-                if obj.tid != r.tid:  # //Changed!
-                    obj.tid = r.tid  # //Changed!
-                    changed_fields.append("tid")  # //Changed!
-
-                if obj.startmetod != (r.startmetod or ""):  # //Changed!
-                    obj.startmetod = (r.startmetod or "")  # //Changed!
-                    changed_fields.append("startmetod")  # //Changed!
-
-                if obj.galopp != (r.galopp or ""):  # //Changed!
-                    obj.galopp = (r.galopp or "")  # //Changed!
-                    changed_fields.append("galopp")  # //Changed!
-
-                if obj.underlag != (r.underlag or ""):  # //Changed!
-                    obj.underlag = (r.underlag or "")  # //Changed!
-                    changed_fields.append("underlag")  # //Changed!
-
-                if obj.kusk != (r.kusk or ""):  # //Changed!
-                    obj.kusk = (r.kusk or "")  # //Changed!
-                    changed_fields.append("kusk")  # //Changed!
-
-                if obj.pris != r.pris:  # //Changed!
-                    obj.pris = r.pris  # //Changed!
-                    changed_fields.append("pris")  # //Changed!
-
-                # //Changed! ODDS-REGEL: skriv bara odds om befintlig är 999/null
-                incoming_odds = r.odds  # //Changed!
-                existing_odds = obj.odds if obj.odds is not None else 999  # //Changed!
-                if incoming_odds not in (None, 999) and existing_odds == 999:  # //Changed!
-                    if obj.odds != int(incoming_odds):  # //Changed!
-                        obj.odds = int(incoming_odds)  # //Changed!
-                        changed_fields.append("odds")  # //Changed!
-
-                if changed_fields:  # //Changed!
-                    obj.save(update_fields=changed_fields)  # //Changed!
-
-            total += len(rows)
-            logging.info("  inserted/updated %d rows", len(rows))
-
-        self.stdout.write(self.style.SUCCESS(f"Done. {total} rows processed."))
+        total = asyncio.run(run_range(self.START_ID, self.END_ID))  # //Changed!
+        self.stdout.write(self.style.SUCCESS(f"Done. {total} rows scraped & processed."))  # //Changed!
