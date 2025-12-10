@@ -25,8 +25,10 @@ def swedish_date_to_yyyymmdd(text: str) -> str:
 
 
 # ---------------------------
-# Normalisering / parsing (som din “old commit”)
+# Normalisering / parsing
 # ---------------------------
+
+_APOSTROPHES_RE = re.compile(r"[\'\u2019]")  # //Changed!  # ' and ’ (right single quotation mark)
 
 def normalize_cell_text(s: str) -> str:  # //Changed!
     if s is None:  # //Changed!
@@ -39,11 +41,13 @@ def trim_to_max(s: str, max_len: int) -> str:  # //Changed!
 
 def normalize_name(name: str) -> str:  # //Changed!
     cleaned = normalize_cell_text(name).replace("*", "")  # //Changed!
+    cleaned = _APOSTROPHES_RE.sub("", cleaned)  # //Changed!  # remove ' and ’
     cleaned = re.sub(r"\s+", " ", cleaned).strip()  # //Changed!
     return trim_to_max(cleaned, 50)  # //Changed!
 
 def normalize_kusk(kusk: str) -> str:  # //Changed!
     cleaned = re.sub(r"\s+", " ", normalize_cell_text(kusk)).strip()  # //Changed!
+    cleaned = _APOSTROPHES_RE.sub("", cleaned)  # //Changed!  # remove ' and ’
     return trim_to_max(cleaned, 80)  # //Changed!
 
 def sanitize_underlag(raw: str) -> str:  # //Changed!
@@ -346,14 +350,14 @@ async def scrape_page(page, url: str) -> List[Row]:  # //Changed!
             nr = int(nr_m.group(0))
 
             namn_raw = normalize_cell_text(await cell("horse").locator("span").first.inner_text())
-            namn = normalize_name(namn_raw.split("(")[0])  # //Changed!
+            namn = normalize_name(namn_raw.split("(")[0])  # //Changed! (removes apostrophes inside normalize_name)
 
             kusk = ""
             try:
                 drv = cell("driver")
                 a = drv.locator("a")
                 kusk_raw = (await a.first.inner_text()).strip() if await a.count() > 0 else normalize_cell_text(await drv.inner_text())
-                kusk = normalize_kusk(kusk_raw)
+                kusk = normalize_kusk(kusk_raw)  # //Changed! (removes apostrophes inside normalize_kusk)
             except Exception:
                 kusk = ""
 
@@ -410,6 +414,8 @@ def write_rows_to_db(rows: List[Row]) -> int:  # //Changed!
     unchanged_n = 0  # //Changed!
 
     for r in rows:  # //Changed!
+        # r.namn är redan normalize_name() från scrape_page,
+        # men vi kör igen för säkerhets skull (idempotent).  # //Changed!
         namn_clean = normalize_name(r.namn)  # //Changed!
 
         try:  # //Changed!
@@ -427,7 +433,7 @@ def write_rows_to_db(rows: List[Row]) -> int:  # //Changed!
                     startmetod=r.startmetod,
                     galopp=r.galopp,
                     underlag=r.underlag,
-                    kusk=r.kusk,
+                    kusk=normalize_kusk(r.kusk),  # //Changed!
                     pris=r.pris,
                     odds=(r.odds if (r.odds not in (None, 999)) else 999),
                 ),
@@ -474,9 +480,10 @@ def write_rows_to_db(rows: List[Row]) -> int:  # //Changed!
             obj.underlag = (r.underlag or "")
             changed_fields.append("underlag")
 
-        if obj.kusk != (r.kusk or ""):
-            obj.kusk = (r.kusk or "")
-            changed_fields.append("kusk")
+        kusk_clean = normalize_kusk(r.kusk)  # //Changed!
+        if obj.kusk != (kusk_clean or ""):  # //Changed!
+            obj.kusk = (kusk_clean or "")  # //Changed!
+            changed_fields.append("kusk")  # //Changed!
 
         if obj.pris != r.pris:
             obj.pris = r.pris
@@ -533,7 +540,6 @@ async def run_range(start_id: int, end_id: int) -> int:  # //Changed!
 
                 total_scraped += len(rows)  # //Changed!
 
-                # //Changed! Django ORM körs synkront i en thread för att undvika SynchronousOnlyOperation
                 await asyncio.to_thread(write_rows_to_db, rows)  # //Changed!
 
         finally:  # //Changed!
