@@ -55,10 +55,7 @@ def sanitize_underlag(raw: str) -> str:  # //Changed!
     t = re.sub(r"[^a-z]", "", t)  # //Changed!
     return t[:2]  # //Changed!  # underlag max_length=2
 
-# Distans/spår kan komma i olika format, vi stödjer både:
-#  - "3/2140n"
-#  - "2140:3"
-#  - "2140" (fallback -> spår=1)
+
 dist_slash_re = re.compile(r"^\s*(\d{1,2})\s*/\s*(\d{3,4})\s*([a-zA-Z() \u00a0]*)\s*$", re.I)  # //Changed!
 dist_colon_re = re.compile(r"^\s*(\d{3,4})\s*:\s*(\d{1,2})\s*$", re.I)  # //Changed!
 dist_only_re = re.compile(r"^\s*(\d{3,4})\s*(?:m)?\s*$", re.I)  # //Changed!
@@ -94,7 +91,7 @@ def parse_dist_spar(txt: str):  # //Changed!
 
     return None, None, ""  # //Changed!
 
-# Placering: Java-logik
+
 placering_with_r = re.compile(r"^(\d{1,2})r$", re.I)  # //Changed!
 
 def map_placering_value(raw: str):  # //Changed!
@@ -127,7 +124,7 @@ def map_placering_value(raw: str):  # //Changed!
 
     return v  # //Changed!
 
-# Tid: Java-logik (99.0 för dist/kub/vmk/u/d samt “heltal utan sep” när bokstäver finns)
+
 TIME_VALUE = re.compile(r"(?:\d+\.)?(\d{1,2})[.,](\d{1,2})")  # //Changed!
 
 def parse_tid_cell(raw: str):  # //Changed!
@@ -135,7 +132,6 @@ def parse_tid_cell(raw: str):  # //Changed!
     if not t:  # //Changed!
         return None, "", ""  # //Changed!
 
-    # ta bort parenteser + whitespace
     t2 = re.sub(r"[()\s]", "", t)  # //Changed!
 
     letters = re.sub(r"[0-9\.,]", "", t2)  # //Changed!
@@ -155,7 +151,6 @@ def parse_tid_cell(raw: str):  # //Changed!
     if force99:  # //Changed!
         return 99.0, startmetod, galopp  # //Changed!
 
-    # Om ingen komma/punkt finns men det finns siffror (<=2) och bokstäver => tid=99
     if tid is None:  # //Changed!
         has_sep = ("," in t2) or ("." in t2)  # //Changed!
         digits = re.sub(r"\D+", "", t2)  # //Changed!
@@ -189,12 +184,6 @@ def _parse_swe_int(token: str) -> Optional[int]:  # //Changed!
         return None  # //Changed!
 
 def parse_pris_text(full_text: str) -> Tuple[List[int], Optional[int], Optional[int]]:  # //Changed!
-    """
-    Returns (prislista, lagst_pris, prisplacerade_n)
-    - prislista: [35000, 17500, ...]
-    - lagst_pris: t.ex 1500 (om “Lägst 1.500 kr ...” finns)
-    - prisplacerade_n: t.ex 8 (om "(8 prisplacerade)" finns)
-    """  # //Changed!
     text = normalize_cell_text(full_text)  # //Changed!
     if not text:  # //Changed!
         return [], None, None  # //Changed!
@@ -205,7 +194,6 @@ def parse_pris_text(full_text: str) -> Tuple[List[int], Optional[int], Optional[
 
     prize_part = normalize_cell_text(m.group(1))  # //Changed!
 
-    # split på '-' och plocka ut siffror (tillåt "(0)" också)
     prizes: List[int] = []  # //Changed!
     for raw_tok in prize_part.split("-"):  # //Changed!
         v = _parse_swe_int(raw_tok)  # //Changed!
@@ -213,7 +201,6 @@ def parse_pris_text(full_text: str) -> Tuple[List[int], Optional[int], Optional[
             continue  # //Changed!
         prizes.append(v)  # //Changed!
 
-    # (X prisplacerade)
     pn = None  # //Changed!
     mp = PRISPLACERADE_RE.search(text)  # //Changed!
     if mp:  # //Changed!
@@ -222,7 +209,6 @@ def parse_pris_text(full_text: str) -> Tuple[List[int], Optional[int], Optional[
         except ValueError:  # //Changed!
             pn = None  # //Changed!
 
-    # Lägst Y kr
     min_pris = None  # //Changed!
     ml = LAGST_RE.search(text)  # //Changed!
     if ml:  # //Changed!
@@ -245,7 +231,6 @@ def pris_for_placering(placering: Optional[int], prizes: List[int], min_pris: Op
             return int(min_pris)  # //Changed!
         return 0  # //Changed!
 
-    # ingen “Pris:” info -> default 0
     return 0  # //Changed!
 
 
@@ -299,6 +284,7 @@ class Row:
     underlag: str
     kusk: str
     pris: int  # //Changed!
+    odds: Optional[int] = None  # //Changed! (kan vara None om ej hittas)
 
 
 # ---------------------------
@@ -306,7 +292,6 @@ class Row:
 # ---------------------------
 
 async def _extract_pris_text_from_section(section) -> str:  # //Changed!
-    # Försök hitta raden med “Pris:” inne i lopp-sektionen  # //Changed!
     try:  # //Changed!
         loc = section.get_by_text(re.compile(r"\bPris\s*:", re.I))  # //Changed!
         if await loc.count() > 0:  # //Changed!
@@ -356,7 +341,6 @@ async def scrape_page(url: str) -> List[Row]:
 
                 section = header.locator("xpath=ancestor::div[contains(@class,'MuiBox-root')][1]")
 
-                # //Changed! Prisinfo per lopp (läser “Pris: ...” texten)
                 pris_text = await _extract_pris_text_from_section(section)  # //Changed!
                 prizes, min_pris, _prisplacerade_n = parse_pris_text(pris_text)  # //Changed!
 
@@ -374,9 +358,8 @@ async def scrape_page(url: str) -> List[Row]:
                     nr = int(nr_m.group(0))  # //Changed!
 
                     namn_raw = normalize_cell_text(await cell("horse").locator("span").first.inner_text())
-                    namn = normalize_name(namn_raw.split("(")[0])  # //Changed! (inkl * bort + trim)
+                    namn = normalize_name(namn_raw.split("(")[0])  # //Changed!
 
-                    # Kusk (driver)
                     kusk = ""  # //Changed!
                     try:  # //Changed!
                         drv = cell("driver")  # //Changed!
@@ -386,20 +369,26 @@ async def scrape_page(url: str) -> List[Row]:
                     except Exception:  # //Changed!
                         kusk = ""  # //Changed!
 
-                    # Placering (Java-logik)
                     placetxt = normalize_cell_text(await cell("placementDisplay").inner_text())
                     placering = map_placering_value(placetxt)  # //Changed!
 
-                    # Distans/spår/underlag (robust + sanitize)
                     dist_raw = normalize_cell_text(await cell("startPositionAndDistance").inner_text())
                     distans, spar, underlag = parse_dist_spar(dist_raw)  # //Changed!
 
-                    # Tid/startmetod/galopp (Java-logik)
                     tid_raw = normalize_cell_text(await cell("time").inner_text())
                     tid, startmetod, galopp = parse_tid_cell(tid_raw)  # //Changed!
 
-                    # //Changed! Pris per häst baserat på placering + loppets Pris-rad
                     pris = pris_for_placering(placering, prizes, min_pris)  # //Changed!
+
+                    # //Changed! Odds (valfritt): försök läsa om fältet finns, annars None
+                    odds = None  # //Changed!
+                    try:  # //Changed!
+                        odds_txt = normalize_cell_text(await cell("odds").inner_text())  # //Changed!
+                        mm = re.search(r"\d+", odds_txt)  # //Changed!
+                        if mm:  # //Changed!
+                            odds = int(mm.group(0))  # //Changed!
+                    except Exception:  # //Changed!
+                        odds = None  # //Changed!
 
                     data.append(Row(
                         datum=datum,
@@ -416,6 +405,7 @@ async def scrape_page(url: str) -> List[Row]:
                         underlag=underlag,
                         kusk=kusk,
                         pris=pris,  # //Changed!
+                        odds=odds,  # //Changed!
                     ))
 
             return data
@@ -457,7 +447,8 @@ class Command(BaseCommand):
             for r in rows:
                 namn_clean = normalize_name(r.namn)  # //Changed!
 
-                HorseResult.objects.update_or_create(
+                # //Changed! get_or_create + selektiv uppdatering så vi kan skydda odds
+                obj, created = HorseResult.objects.get_or_create(  # //Changed!
                     datum=r.datum,
                     bankod=r.bankod,
                     lopp=r.lopp,
@@ -473,8 +464,66 @@ class Command(BaseCommand):
                         underlag=r.underlag,
                         kusk=r.kusk,
                         pris=r.pris,  # //Changed!
+                        odds=(r.odds if (r.odds not in (None, 999)) else 999),  # //Changed!
                     ),
-                )
+                )  # //Changed!
+
+                if created:  # //Changed!
+                    continue  # //Changed!
+
+                changed_fields = []  # //Changed!
+
+                # //Changed! Uppdatera allt som vanligt (som update_or_create hade gjort)
+                if obj.nr != r.nr:  # //Changed!
+                    obj.nr = r.nr  # //Changed!
+                    changed_fields.append("nr")  # //Changed!
+
+                if obj.distans != r.distans:  # //Changed!
+                    obj.distans = r.distans  # //Changed!
+                    changed_fields.append("distans")  # //Changed!
+
+                if obj.spar != r.spar:  # //Changed!
+                    obj.spar = r.spar  # //Changed!
+                    changed_fields.append("spar")  # //Changed!
+
+                if obj.placering != r.placering:  # //Changed!
+                    obj.placering = r.placering  # //Changed!
+                    changed_fields.append("placering")  # //Changed!
+
+                if obj.tid != r.tid:  # //Changed!
+                    obj.tid = r.tid  # //Changed!
+                    changed_fields.append("tid")  # //Changed!
+
+                if obj.startmetod != (r.startmetod or ""):  # //Changed!
+                    obj.startmetod = (r.startmetod or "")  # //Changed!
+                    changed_fields.append("startmetod")  # //Changed!
+
+                if obj.galopp != (r.galopp or ""):  # //Changed!
+                    obj.galopp = (r.galopp or "")  # //Changed!
+                    changed_fields.append("galopp")  # //Changed!
+
+                if obj.underlag != (r.underlag or ""):  # //Changed!
+                    obj.underlag = (r.underlag or "")  # //Changed!
+                    changed_fields.append("underlag")  # //Changed!
+
+                if obj.kusk != (r.kusk or ""):  # //Changed!
+                    obj.kusk = (r.kusk or "")  # //Changed!
+                    changed_fields.append("kusk")  # //Changed!
+
+                if obj.pris != r.pris:  # //Changed!
+                    obj.pris = r.pris  # //Changed!
+                    changed_fields.append("pris")  # //Changed!
+
+                # //Changed! ODDS-REGEL: skriv bara odds om befintlig är 999/null
+                incoming_odds = r.odds  # //Changed!
+                existing_odds = obj.odds if obj.odds is not None else 999  # //Changed!
+                if incoming_odds not in (None, 999) and existing_odds == 999:  # //Changed!
+                    if obj.odds != int(incoming_odds):  # //Changed!
+                        obj.odds = int(incoming_odds)  # //Changed!
+                        changed_fields.append("odds")  # //Changed!
+
+                if changed_fields:  # //Changed!
+                    obj.save(update_fields=changed_fields)  # //Changed!
 
             total += len(rows)
             logging.info("  inserted/updated %d rows", len(rows))

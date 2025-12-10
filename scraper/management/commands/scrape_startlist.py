@@ -210,6 +210,7 @@ def upsert_resultat_from_startrow(r: StartRow):  # //Changed!
             distans=r.distans,  # //Changed!
             spar=r.spar,  # //Changed!
             kusk=kusk_res,  # //Changed!
+            # //Changed! odds lämnas helt orörd här (vi sätter den aldrig från startlista)
         ),  # //Changed!
     )  # //Changed!
 
@@ -234,6 +235,7 @@ def upsert_resultat_from_startrow(r: StartRow):  # //Changed!
         obj.kusk = kusk_res  # //Changed!
         changed_fields.append("kusk")  # //Changed!
 
+    # //Changed! OBS: odds uppdateras aldrig här, så en befintlig odds (t.ex. 30) kan inte skrivas över.
     if changed_fields:  # //Changed!
         obj.save(update_fields=changed_fields)  # //Changed!
 
@@ -243,7 +245,7 @@ def upsert_resultat_from_startrow(r: StartRow):  # //Changed!
 # ---------------------------
 
 class Command(BaseCommand):
-    START_ID = 610_375
+    START_ID = 610_380
     END_ID   = 610_450
     help = "Scrape hard-coded ts-ID range into Startlista (and also seed Resultat for today/future only)"  # //Changed!
 
@@ -268,7 +270,6 @@ class Command(BaseCommand):
                 continue
 
             for r in rows:
-                # Startlista (som innan)
                 StartList.objects.update_or_create(
                     startdatum=r.startdatum,
                     bankod=r.bankod,
@@ -282,7 +283,6 @@ class Command(BaseCommand):
                     ),
                 )
 
-                # //Changed! Resultat seed/upsert endast för idag eller framtid
                 if r.startdatum >= today_int:  # //Changed!
                     upsert_resultat_from_startrow(r)  # //Changed!
                     total_resultat += 1  # //Changed!
