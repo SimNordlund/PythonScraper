@@ -556,7 +556,7 @@ async def run_range(start_id: int, end_id: int) -> int:  # //Changed!
 class Command(BaseCommand):
     help = "Scrape hard-coded ts-ID range into Result"
 
-    START_ID = 610_375
+    START_ID = 610_005
     END_ID = 610_420
 
     def handle(self, *args, **opts):
