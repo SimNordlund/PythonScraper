@@ -1,11 +1,11 @@
 import asyncio, re, unicodedata, logging
 from dataclasses import dataclass
-from typing import List, Optional  # //Changed!
-from datetime import date  # //Changed!
-from django.utils import timezone  # //Changed!
+from typing import List, Optional  
+from datetime import date  
+from django.utils import timezone  
 from playwright.async_api import async_playwright, Error as PlaywrightError
 from django.core.management.base import BaseCommand
-from scraper.models import StartList, HorseResult  # //Changed!
+from scraper.models import StartList, HorseResult  
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
@@ -22,49 +22,41 @@ def swedish_date_to_yyyymmdd(txt: str) -> str:
     return f"{int(y):04d}{SWEDISH_MONTH[m]:02d}{int(d):02d}"
 
 
-# ---------------------------
-# Normalisering
-# ---------------------------
+def normalize_cell_text(s: str) -> str:  
+    if s is None:  
+        return ""  
+    return s.replace("\u00a0", " ").strip()  
 
-def normalize_cell_text(s: str) -> str:  # //Changed!
-    if s is None:  # //Changed!
-        return ""  # //Changed!
-    return s.replace("\u00a0", " ").strip()  # //Changed!
+def trim_to_max(s: str, max_len: int) -> str:  
+    s = s or ""  
+    return s if len(s) <= max_len else s[:max_len]  
 
-def trim_to_max(s: str, max_len: int) -> str:  # //Changed!
-    s = s or ""  # //Changed!
-    return s if len(s) <= max_len else s[:max_len]  # //Changed!
+_paren_re = re.compile(r"\([^)]*\)") 
 
-_paren_re = re.compile(r"\([^)]*\)")  # //Changed!
+def normalize_startlista_name(name: str) -> str:  
+    cleaned = normalize_cell_text(name)  
 
-def normalize_startlista_name(name: str) -> str:  # //Changed!
-    cleaned = normalize_cell_text(name)  # //Changed!
+    cleaned = cleaned.replace("*", "")  
+    cleaned = cleaned.replace("'", "").replace("’", "") 
+    cleaned = _paren_re.sub("", cleaned)  
 
-    cleaned = cleaned.replace("*", "")  # //Changed!
-    cleaned = cleaned.replace("'", "").replace("’", "")  # //Changed! (både ' och ’)
-    cleaned = _paren_re.sub("", cleaned)  # //Changed! (ta bort parentes + innehåll)
+    if len(cleaned) >= 7:  
+        cleaned = cleaned[:-7] 
 
-    if len(cleaned) >= 7:  # //Changed!
-        cleaned = cleaned[:-7]  # //Changed! (ta bort sista 7 tecken)
+    cleaned = cleaned.rstrip() 
+    cleaned = cleaned.upper() 
 
-    cleaned = cleaned.rstrip()  # //Changed! (trim i slutet)
-    cleaned = cleaned.upper()  # //Changed! (UPPERCASE)
+    return trim_to_max(cleaned, 50)  
 
-    return trim_to_max(cleaned, 50)  # //Changed!
+def normalize_kusk(kusk: str, max_len: int) -> str:  
+    cleaned = re.sub(r"\s+", " ", normalize_cell_text(kusk)).strip()  
+    return trim_to_max(cleaned, max_len)  
 
-def normalize_kusk(kusk: str, max_len: int) -> str:  # //Changed!
-    cleaned = re.sub(r"\s+", " ", normalize_cell_text(kusk)).strip()  # //Changed!
-    return trim_to_max(cleaned, max_len)  # //Changed!
-
-
-# ---------------------------
-# Distans/spår (startlista)
-# ---------------------------
 
 dist_re = re.compile(r"\s*(\d+)\s*/\s*([\d,]+)", re.I)
 
 def parse_dist_spar(txt: str):
-    t = normalize_cell_text(txt)  # //Changed!
+    t = normalize_cell_text(txt)  
     m = dist_re.match(t)
     if not m:
         return None, None
@@ -72,10 +64,6 @@ def parse_dist_spar(txt: str):
     dist = int(m.group(2).replace(",", ""))
     return dist, spar
 
-
-# ---------------------------
-# Bankod mapping (oförändrat)
-# ---------------------------
 
 def _strip(s: str) -> str:
     return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
@@ -93,13 +81,9 @@ FULLNAME_TO_BANKOD = {
 FULLNAME_TO_BANKOD |= {_strip(k): v for k, v in FULLNAME_TO_BANKOD.items()}
 
 def track_to_bankod(n: str) -> str:
-    n = normalize_cell_text(n).upper()  # //Changed!
+    n = normalize_cell_text(n).upper()  
     return FULLNAME_TO_BANKOD.get(n, FULLNAME_TO_BANKOD.get(_strip(n), n[:2].title()))
 
-
-# ---------------------------
-# Dataclass
-# ---------------------------
 
 @dataclass
 class StartRow:
@@ -112,10 +96,6 @@ class StartRow:
     distans: Optional[int]
     kusk: str
 
-
-# ---------------------------
-# Scraper
-# ---------------------------
 
 async def scrape_startlist(url: str) -> List[StartRow]:
     async with async_playwright() as p:
@@ -141,14 +121,14 @@ async def scrape_startlist(url: str) -> List[StartRow]:
             await browser.close()
             return []
 
-        raw_track = normalize_cell_text(await nav.nth(0).inner_text()).upper()  # //Changed!
+        raw_track = normalize_cell_text(await nav.nth(0).inner_text()).upper()  
         if raw_track.startswith(("TÄVLINGSDAG", "TRAVTÄVLING")):
             parts = raw_track.split(maxsplit=1)
             raw_track = parts[1] if len(parts) > 1 else raw_track
 
         bankod = track_to_bankod(raw_track)
 
-        startdatum = int(swedish_date_to_yyyymmdd(normalize_cell_text(await nav.nth(1).inner_text())))  # //Changed!
+        startdatum = int(swedish_date_to_yyyymmdd(normalize_cell_text(await nav.nth(1).inner_text())))  
 
         out: List[StartRow] = []
         lopp_headers = page.locator("//h2[starts-with(normalize-space(),'Lopp')]")
@@ -168,19 +148,19 @@ async def scrape_startlist(url: str) -> List[StartRow]:
             for row in rows:
                 cell = lambda f: row.locator(f"div[data-field='{f}']")
 
-                nr_txt = normalize_cell_text(await cell("horse").locator("div").first.inner_text())  # //Changed!
-                nr_m = re.search(r"\d+", nr_txt)  # //Changed!
-                if not nr_m:  # //Changed!
-                    continue  # //Changed!
-                nr = int(nr_m.group(0))  # //Changed!
+                nr_txt = normalize_cell_text(await cell("horse").locator("div").first.inner_text())  
+                nr_m = re.search(r"\d+", nr_txt)  
+                if not nr_m:  
+                    continue  
+                nr = int(nr_m.group(0))  
 
-                namn_raw = normalize_cell_text(await cell("horse").locator("span").first.inner_text())  # //Changed!
-                namn = normalize_startlista_name(namn_raw)  # //Changed!
+                namn_raw = normalize_cell_text(await cell("horse").locator("span").first.inner_text())  
+                namn = normalize_startlista_name(namn_raw)  
 
-                kusk_raw = normalize_cell_text(await cell("driver").inner_text())  # //Changed!
-                kusk = normalize_kusk(kusk_raw, 120)  # //Changed! (startlista max 120)
+                kusk_raw = normalize_cell_text(await cell("driver").inner_text())  
+                kusk = normalize_kusk(kusk_raw, 120) 
 
-                dist_raw = normalize_cell_text(await cell("trackName").inner_text())  # //Changed!
+                dist_raw = normalize_cell_text(await cell("trackName").inner_text())  
                 distans, spar = parse_dist_spar(dist_raw)
 
                 out.append(StartRow(
@@ -197,78 +177,68 @@ async def scrape_startlist(url: str) -> List[StartRow]:
         await browser.close()
         return out
 
+def _today_yyyymmdd() -> int:  
+    d: date = timezone.localdate()  
+    return d.year * 10000 + d.month * 100 + d.day  
 
-# ---------------------------
-# DB write helpers
-# ---------------------------
+def upsert_resultat_from_startrow(r: StartRow):  
+    namn_clean = r.namn  
+    kusk_res = normalize_kusk(r.kusk, 80)  
 
-def _today_yyyymmdd() -> int:  # //Changed!
-    d: date = timezone.localdate()  # //Changed!
-    return d.year * 10000 + d.month * 100 + d.day  # //Changed!
-
-def upsert_resultat_from_startrow(r: StartRow):  # //Changed!
-    namn_clean = r.namn  # //Changed! (viktigt: normalisera INTE igen, annars tas sista 7 tecken bort två gånger)
-    kusk_res = normalize_kusk(r.kusk, 80)  # //Changed! (resultat max 80)
-
-    obj, created = HorseResult.objects.get_or_create(  # //Changed!
-        datum=r.startdatum,  # //Changed!
-        bankod=r.bankod,  # //Changed!
-        lopp=r.lopp,  # //Changed!
-        namn=namn_clean,  # //Changed!
-        defaults=dict(  # //Changed!
-            nr=r.nr,  # //Changed!
-            distans=r.distans,  # //Changed!
-            spar=r.spar,  # //Changed!
-            kusk=kusk_res,  # //Changed!
+    obj, created = HorseResult.objects.get_or_create(  
+        datum=r.startdatum,  
+        bankod=r.bankod,  
+        lopp=r.lopp,  
+        namn=namn_clean,  
+        defaults=dict(  
+            nr=r.nr,  
+            distans=r.distans,  
+            spar=r.spar,  
+            kusk=kusk_res,  
             placering=0,
-            # //Changed! odds lämnas helt orörd här (vi sätter den aldrig från startlista)
-        ),  # //Changed!
-    )  # //Changed!
+        ),  
+    )  
 
-    if created:  # //Changed!
-        return  # //Changed!
+    if created:  
+        return  
 
-    changed_fields = []  # //Changed!
+    changed_fields = []  
 
-    if obj.nr != r.nr:  # //Changed!
-        obj.nr = r.nr  # //Changed!
-        changed_fields.append("nr")  # //Changed!
+    if obj.nr != r.nr:  
+        obj.nr = r.nr  
+        changed_fields.append("nr")  
 
-    if r.distans is not None and obj.distans != r.distans:  # //Changed!
-        obj.distans = r.distans  # //Changed!
-        changed_fields.append("distans")  # //Changed!
+    if r.distans is not None and obj.distans != r.distans:  
+        obj.distans = r.distans  
+        changed_fields.append("distans")  
 
-    if r.spar is not None and obj.spar != r.spar:  # //Changed!
-        obj.spar = r.spar  # //Changed!
-        changed_fields.append("spar")  # //Changed!
+    if r.spar is not None and obj.spar != r.spar:  
+        obj.spar = r.spar  
+        changed_fields.append("spar")  
 
-    if kusk_res and obj.kusk != kusk_res:  # //Changed!
-        obj.kusk = kusk_res  # //Changed!
-        changed_fields.append("kusk")  # //Changed!
+    if kusk_res and obj.kusk != kusk_res:  
+        obj.kusk = kusk_res  
+        changed_fields.append("kusk")  
         
-    if obj.placering is None:  # //Changed!
-        obj.placering = 0  # //Changed!
-        changed_fields.append("placering")  # //Changed!
+    if obj.placering is None:  
+        obj.placering = 0  
+        changed_fields.append("placering")  
 
-    # //Changed! OBS: odds uppdateras aldrig här, så en befintlig odds (t.ex. 30) kan inte skrivas över.
-    if changed_fields:  # //Changed!
-        obj.save(update_fields=changed_fields)  # //Changed!
+    if changed_fields:  
+        obj.save(update_fields=changed_fields)  
 
 
-# ---------------------------
-# Django management command
-# ---------------------------
 
 class Command(BaseCommand):
     START_ID = 610_385
     END_ID   = 610_450
-    help = "Scrape hard-coded ts-ID range into Startlista (and also seed Resultat for today/future only)"  # //Changed!
+    help = "Scrape hard-coded ts-ID range into Startlista (and also seed Resultat for today/future only)"  
 
     def handle(self, *args, **kwargs):
         base = "https://sportapp.travsport.se/race/raceday/ts{}/startlist/all"
         total = 0
-        total_resultat = 0  # //Changed!
-        today_int = _today_yyyymmdd()  # //Changed!
+        total_resultat = 0  
+        today_int = _today_yyyymmdd()  
 
         for ts in range(self.START_ID, self.END_ID + 1):
             url = base.format(ts)
@@ -291,23 +261,23 @@ class Command(BaseCommand):
                     lopp=r.lopp,
                     nr=r.nr,
                     defaults=dict(
-                        namn=r.namn,  # //Changed! (inte normalisera igen)
+                        namn=r.namn, 
                         spar=r.spar,
                         distans=r.distans,
-                        kusk=normalize_kusk(r.kusk, 120),  # //Changed!
+                        kusk=normalize_kusk(r.kusk, 120),  
                     ),
                 )
 
-                if r.startdatum >= today_int:  # //Changed!
-                    upsert_resultat_from_startrow(r)  # //Changed!
-                    total_resultat += 1  # //Changed!
+                if r.startdatum >= today_int:  
+                    upsert_resultat_from_startrow(r)  
+                    total_resultat += 1  
 
             total += len(rows)
             logging.info(
                 "  inserted/updated %d startlista rows (+%d resultat upserts, today=%d)",
-                len(rows), total_resultat, today_int  # //Changed!
+                len(rows), total_resultat, today_int  
             )
 
         self.stdout.write(self.style.SUCCESS(
             f"Done. {total} startlista rows processed. {total_resultat} resultat upserts (today/future only)."
-        ))  # //Changed!
+        ))  

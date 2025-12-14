@@ -39,13 +39,13 @@ class HorseResult(models.Model):
 
     class Meta:
         db_table = "resultat"
-        constraints = [  # //Changed!
-            models.UniqueConstraint(  # //Changed!
-                fields=("datum", "bankod", "lopp", "namn"),  # //Changed!
-                name="uq_resultat_datum_bankod_lopp_namn",  # //Changed!
+        constraints = [  
+            models.UniqueConstraint(  
+                fields=("datum", "bankod", "lopp", "namn"),  
+                name="uq_resultat_datum_bankod_lopp_namn",  
             ),
         ]
-        ordering = ("datum", "bankod", "lopp", "placering")  # //Changed!
+        ordering = ("datum", "bankod", "lopp", "placering")  
 
 
 class StartList(models.Model):

@@ -1,8 +1,8 @@
 import asyncio, re, unicodedata, logging
 from dataclasses import dataclass
-from typing import List, Tuple, Optional  # //Changed!
+from typing import List, Tuple, Optional 
 from django.core.management.base import BaseCommand
-from django.db import IntegrityError  # //Changed!
+from django.db import IntegrityError 
 from playwright.async_api import async_playwright, Error as PlaywrightError
 from scraper.models import HorseResult
 
@@ -16,218 +16,204 @@ SWEDISH_MONTH = {
 }
 
 def swedish_date_to_yyyymmdd(text: str) -> str:
-    parts = (text or "").strip().upper().split()  # //Changed!
+    parts = (text or "").strip().upper().split()   
     if len(parts) == 4:
         _, d, m, y = parts
     else:
         d, m, y = parts
     return f"{int(y):04d}{SWEDISH_MONTH[m]:02d}{int(d):02d}"
 
+_APOSTROPHES_RE = re.compile(r"[\'\u2019]")    
 
-# ---------------------------
-# Normalisering / parsing
-# ---------------------------
+def normalize_cell_text(s: str) -> str:  
+    if s is None:  
+        return ""  
+    return s.replace("\u00a0", " ").strip()   
 
-_APOSTROPHES_RE = re.compile(r"[\'\u2019]")  # //Changed!  # ' and ’ (right single quotation mark)
+def trim_to_max(s: str, max_len: int) -> str:   
+    s = s or ""  
+    return s if len(s) <= max_len else s[:max_len]   
 
-def normalize_cell_text(s: str) -> str:  # //Changed!
-    if s is None:  # //Changed!
-        return ""  # //Changed!
-    return s.replace("\u00a0", " ").strip()  # //Changed!
+def normalize_name(name: str) -> str:  
+    cleaned = normalize_cell_text(name).replace("*", "")   
+    cleaned = _APOSTROPHES_RE.sub("", cleaned) 
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()   
+    return trim_to_max(cleaned, 50)   
 
-def trim_to_max(s: str, max_len: int) -> str:  # //Changed!
-    s = s or ""  # //Changed!
-    return s if len(s) <= max_len else s[:max_len]  # //Changed!
+def normalize_kusk(kusk: str) -> str:   
+    cleaned = re.sub(r"\s+", " ", normalize_cell_text(kusk)).strip()  
+    cleaned = _APOSTROPHES_RE.sub("", cleaned) 
+    return trim_to_max(cleaned, 80)   
 
-def normalize_name(name: str) -> str:  # //Changed!
-    cleaned = normalize_cell_text(name).replace("*", "")  # //Changed!
-    cleaned = _APOSTROPHES_RE.sub("", cleaned)  # //Changed!  # remove ' and ’
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()  # //Changed!
-    return trim_to_max(cleaned, 50)  # //Changed!
-
-def normalize_kusk(kusk: str) -> str:  # //Changed!
-    cleaned = re.sub(r"\s+", " ", normalize_cell_text(kusk)).strip()  # //Changed!
-    cleaned = _APOSTROPHES_RE.sub("", cleaned)  # //Changed!  # remove ' and ’
-    return trim_to_max(cleaned, 80)  # //Changed!
-
-def sanitize_underlag(raw: str) -> str:  # //Changed!
-    t = normalize_cell_text(raw).lower()  # //Changed!
-    if not t:  # //Changed!
-        return ""  # //Changed!
-    t = t.replace("(", "").replace(")", "")  # //Changed!
-    t = re.sub(r"\s+", "", t)  # //Changed!
-    t = re.sub(r"[^a-z]", "", t)  # //Changed!
-    return t[:2]  # //Changed!
+def sanitize_underlag(raw: str) -> str:  
+    t = normalize_cell_text(raw).lower()  
+    if not t:  
+        return ""  
+    t = t.replace("(", "").replace(")", "")  
+    t = re.sub(r"\s+", "", t)  
+    t = re.sub(r"[^a-z]", "", t)  
+    return t[:2]  
 
 
-dist_slash_re = re.compile(r"^\s*(\d{1,2})\s*/\s*(\d{3,4})\s*([a-zA-Z() \u00a0]*)\s*$", re.I)  # //Changed!
-dist_colon_re = re.compile(r"^\s*(\d{3,4})\s*:\s*(\d{1,2})\s*$", re.I)  # //Changed!
-dist_only_re = re.compile(r"^\s*(\d{3,4})\s*(?:m)?\s*$", re.I)  # //Changed!
+dist_slash_re = re.compile(r"^\s*(\d{1,2})\s*/\s*(\d{3,4})\s*([a-zA-Z() \u00a0]*)\s*$", re.I)  
+dist_colon_re = re.compile(r"^\s*(\d{3,4})\s*:\s*(\d{1,2})\s*$", re.I)  
+dist_only_re = re.compile(r"^\s*(\d{3,4})\s*(?:m)?\s*$", re.I)  
 
-def parse_dist_spar(txt: str):  # //Changed!
-    t = normalize_cell_text(txt)  # //Changed!
-    if not t:  # //Changed!
-        return None, None, ""  # //Changed!
+def parse_dist_spar(txt: str):  
+    t = normalize_cell_text(txt)  
+    if not t:  
+        return None, None, ""  
 
-    m = dist_slash_re.match(t)  # //Changed!
-    if m:  # //Changed!
-        spar = int(m.group(1))  # //Changed!
-        distans = int(m.group(2))  # //Changed!
-        underlag = sanitize_underlag(m.group(3))  # //Changed!
-        return distans, spar, underlag  # //Changed!
+    m = dist_slash_re.match(t)  
+    if m:  
+        spar = int(m.group(1))  
+        distans = int(m.group(2))  
+        underlag = sanitize_underlag(m.group(3))  
+        return distans, spar, underlag  
 
-    m = dist_colon_re.match(t)  # //Changed!
-    if m:  # //Changed!
-        distans = int(m.group(1))  # //Changed!
-        spar = int(m.group(2))  # //Changed!
-        return distans, spar, ""  # //Changed!
+    m = dist_colon_re.match(t)  
+    if m:  
+        distans = int(m.group(1))  
+        spar = int(m.group(2))  
+        return distans, spar, ""  
 
-    m = dist_only_re.match(t)  # //Changed!
-    if m:  # //Changed!
-        distans = int(m.group(1))  # //Changed!
-        return distans, 1, ""  # //Changed!
+    m = dist_only_re.match(t)  
+    if m:  
+        distans = int(m.group(1))  
+        return distans, 1, ""  
 
-    return None, None, ""  # //Changed!
-
-
-placering_with_r = re.compile(r"^(\d{1,2})r$", re.I)  # //Changed!
-
-def map_placering_value(raw: str):  # //Changed!
-    t = normalize_cell_text(raw).lower()  # //Changed!
-    if not t:  # //Changed!
-        return None  # //Changed!
-
-    token = re.split(r"\s+", t, 1)[0]  # //Changed!
-    token = re.sub(r"[^0-9a-zåäö]", "", token)  # //Changed!
-    if not token:  # //Changed!
-        return None  # //Changed!
-
-    mr = placering_with_r.match(token)  # //Changed!
-    if mr:  # //Changed!
-        token = mr.group(1)  # //Changed!
-
-    if token in ("k", "p", "str", "d"):  # //Changed!
-        return 99  # //Changed!
-
-    if not token.isdigit() or len(token) > 2:  # //Changed!
-        return None  # //Changed!
-
-    try:  # //Changed!
-        v = int(token)  # //Changed!
-    except ValueError:  # //Changed!
-        return None  # //Changed!
-
-    if v == 0 or v == 9:  # //Changed!
-        return 15  # //Changed!
-
-    return v  # //Changed!
+    return None, None, ""  
 
 
-TIME_VALUE = re.compile(r"(?:\d+\.)?(\d{1,2})[.,](\d{1,2})")  # //Changed!
+placering_with_r = re.compile(r"^(\d{1,2})r$", re.I)  
 
-def parse_tid_cell(raw: str):  # //Changed!
-    t = normalize_cell_text(raw).lower()  # //Changed!
-    if not t:  # //Changed!
-        return None, "", ""  # //Changed!
+def map_placering_value(raw: str):  
+    t = normalize_cell_text(raw).lower()  
+    if not t:  
+        return None  
 
-    t2 = re.sub(r"[()\s]", "", t)  # //Changed!
+    token = re.split(r"\s+", t, 1)[0]  
+    token = re.sub(r"[^0-9a-zåäö]", "", token)  
+    if not token:  
+        return None  
 
-    letters = re.sub(r"[0-9\.,]", "", t2)  # //Changed!
-    startmetod = "a" if "a" in letters else ""  # //Changed!
-    galopp = "g" if "g" in letters else ""  # //Changed!
+    mr = placering_with_r.match(token)  
+    if mr:  
+        token = mr.group(1)  
 
-    force99 = ("dist" in letters) or ("kub" in letters) or ("vmk" in letters) or ("u" in letters) or ("d" in letters)  # //Changed!
+    if token in ("k", "p", "str", "d"): 
+        return 99 
 
-    tid = None  # //Changed!
-    m = TIME_VALUE.search(t2)  # //Changed!
-    if m:  # //Changed!
-        try:  # //Changed!
-            tid = float(f"{m.group(1)}.{m.group(2)}")  # //Changed!
-        except ValueError:  # //Changed!
-            tid = None  # //Changed!
+    if not token.isdigit() or len(token) > 2: 
+        return None 
 
-    if force99:  # //Changed!
-        return 99.0, startmetod, galopp  # //Changed!
+    try: 
+        v = int(token) 
+    except ValueError: 
+        return None 
 
-    if tid is None:  # //Changed!
-        has_sep = ("," in t2) or ("." in t2)  # //Changed!
-        digits = re.sub(r"\D+", "", t2)  # //Changed!
-        if (not has_sep) and digits and len(digits) <= 2 and letters:  # //Changed!
-            return 99.0, startmetod, galopp  # //Changed!
+    if v == 0 or v == 9: 
+        return 15 
 
-    return tid, startmetod, galopp  # //Changed!
+    return v 
 
 
-# ---------------------------
-# Pris
-# ---------------------------
+TIME_VALUE = re.compile(r"(?:\d+\.)?(\d{1,2})[.,](\d{1,2})") 
 
-PRIS_LINE_RE = re.compile(r"\bPris\s*:\s*(.+?)\bkr\b", re.IGNORECASE | re.DOTALL)  # //Changed!
-PRISPLACERADE_RE = re.compile(r"\((\d+)\s*prisplacerade\)", re.IGNORECASE)  # //Changed!
-LAGST_RE = re.compile(r"Lägst\s+([0-9][0-9\.\s\u00a0]*)\s*kr", re.IGNORECASE)  # //Changed!
+def parse_tid_cell(raw: str): 
+    t = normalize_cell_text(raw).lower() 
+    if not t: 
+        return None, "", "" 
 
-def _parse_swe_int(token: str) -> Optional[int]:  # //Changed!
-    if token is None:  # //Changed!
-        return None  # //Changed!
-    t = normalize_cell_text(token)  # //Changed!
-    t = t.replace("(", "").replace(")", "")  # //Changed!
-    t = t.replace("\u00a0", " ")  # //Changed!
-    t = t.replace(".", "").replace(" ", "")  # //Changed!
-    t = re.sub(r"[^\d]", "", t)  # //Changed!
-    if not t:  # //Changed!
-        return None  # //Changed!
-    try:  # //Changed!
-        return int(t)  # //Changed!
-    except ValueError:  # //Changed!
-        return None  # //Changed!
+    t2 = re.sub(r"[()\s]", "", t) 
 
-def parse_pris_text(full_text: str) -> Tuple[List[int], Optional[int], Optional[int]]:  # //Changed!
-    text = normalize_cell_text(full_text)  # //Changed!
-    if not text:  # //Changed!
-        return [], None, None  # //Changed!
+    letters = re.sub(r"[0-9\.,]", "", t2) 
+    startmetod = "a" if "a" in letters else "" 
+    galopp = "g" if "g" in letters else "" 
 
-    m = PRIS_LINE_RE.search(text)  # //Changed!
-    if not m:  # //Changed!
-        return [], _parse_swe_int(LAGST_RE.search(text).group(1)) if LAGST_RE.search(text) else None, None  # //Changed!
+    force99 = ("dist" in letters) or ("kub" in letters) or ("vmk" in letters) or ("u" in letters) or ("d" in letters) 
 
-    prize_part = normalize_cell_text(m.group(1))  # //Changed!
+    tid = None 
+    m = TIME_VALUE.search(t2) 
+    if m: 
+        try: 
+            tid = float(f"{m.group(1)}.{m.group(2)}") 
+        except ValueError: 
+            tid = None 
 
-    prizes: List[int] = []  # //Changed!
-    for raw_tok in prize_part.split("-"):  # //Changed!
-        v = _parse_swe_int(raw_tok)  # //Changed!
-        if v is None:  # //Changed!
-            continue  # //Changed!
-        prizes.append(v)  # //Changed!
+    if force99: 
+        return 99.0, startmetod, galopp 
 
-    pn = None  # //Changed!
-    mp = PRISPLACERADE_RE.search(text)  # //Changed!
-    if mp:  # //Changed!
-        try:  # //Changed!
-            pn = int(mp.group(1))  # //Changed!
-        except ValueError:  # //Changed!
-            pn = None  # //Changed!
+    if tid is None: 
+        has_sep = ("," in t2) or ("." in t2) 
+        digits = re.sub(r"\D+", "", t2) 
+        if (not has_sep) and digits and len(digits) <= 2 and letters: 
+            return 99.0, startmetod, galopp 
 
-    min_pris = None  # //Changed!
-    ml = LAGST_RE.search(text)  # //Changed!
-    if ml:  # //Changed!
-        min_pris = _parse_swe_int(ml.group(1))  # //Changed!
+    return tid, startmetod, galopp 
 
-    return prizes, min_pris, pn  # //Changed!
+PRIS_LINE_RE = re.compile(r"\bPris\s*:\s*(.+?)\bkr\b", re.IGNORECASE | re.DOTALL) 
+PRISPLACERADE_RE = re.compile(r"\((\d+)\s*prisplacerade\)", re.IGNORECASE) 
+LAGST_RE = re.compile(r"Lägst\s+([0-9][0-9\.\s\u00a0]*)\s*kr", re.IGNORECASE) 
 
-def pris_for_placering(placering: Optional[int], prizes: List[int], min_pris: Optional[int]) -> int:  # //Changed!
-    if placering is None or placering == 99 or placering <= 0:  # //Changed!
-        return 0  # //Changed!
-    if prizes:  # //Changed!
-        if placering <= len(prizes):  # //Changed!
-            return prizes[placering - 1]  # //Changed!
-        if min_pris is not None:  # //Changed!
-            return int(min_pris)  # //Changed!
-    return 0  # //Changed!
+def _parse_swe_int(token: str) -> Optional[int]: 
+    if token is None: 
+        return None 
+    t = normalize_cell_text(token) 
+    t = t.replace("(", "").replace(")", "") 
+    t = t.replace("\u00a0", " ") 
+    t = t.replace(".", "").replace(" ", "") 
+    t = re.sub(r"[^\d]", "", t) 
+    if not t: 
+        return None 
+    try: 
+        return int(t) 
+    except ValueError: 
+        return None 
 
+def parse_pris_text(full_text: str) -> Tuple[List[int], Optional[int], Optional[int]]: 
+    text = normalize_cell_text(full_text) 
+    if not text: 
+        return [], None, None 
 
-# ---------------------------
-# Bankod
-# ---------------------------
+    m = PRIS_LINE_RE.search(text) 
+    if not m: 
+        return [], _parse_swe_int(LAGST_RE.search(text).group(1)) if LAGST_RE.search(text) else None, None 
+
+    prize_part = normalize_cell_text(m.group(1)) 
+
+    prizes: List[int] = [] 
+    for raw_tok in prize_part.split("-"): 
+        v = _parse_swe_int(raw_tok) 
+        if v is None: 
+            continue 
+        prizes.append(v) 
+
+    pn = None 
+    mp = PRISPLACERADE_RE.search(text) 
+    if mp: 
+        try: 
+            pn = int(mp.group(1)) 
+        except ValueError: 
+            pn = None 
+
+    min_pris = None 
+    ml = LAGST_RE.search(text) 
+    if ml: 
+        min_pris = _parse_swe_int(ml.group(1)) 
+
+    return prizes, min_pris, pn 
+
+def pris_for_placering(placering: Optional[int], prizes: List[int], min_pris: Optional[int]) -> int: 
+    if placering is None or placering == 99 or placering <= 0: 
+        return 0 
+    if prizes: 
+        if placering <= len(prizes): 
+            return prizes[placering - 1] 
+        if min_pris is not None: 
+            return int(min_pris) 
+    return 0 
+
 
 FULLNAME_TO_BANKOD = {
     "ARVIKA": "Ar",  "AXEVALLA": "Ax",  "BERGSÅKER": "B",  "BODEN": "Bo",
@@ -255,10 +241,6 @@ def track_to_bankod(name: str) -> str:
     return _ASCII_FALLBACK.get(name_ascii, name_up[:2].title())
 
 
-# ---------------------------
-# Dataclass
-# ---------------------------
-
 @dataclass
 class Row:
     datum: int
@@ -278,35 +260,32 @@ class Row:
     odds: Optional[int] = None
 
 
-# ---------------------------
-# Scrape one page (async)
-# ---------------------------
 
-async def _extract_pris_text_from_section(section) -> str:  # //Changed!
-    try:  # //Changed!
-        loc = section.get_by_text(re.compile(r"\bPris\s*:", re.I))  # //Changed!
-        if await loc.count() > 0:  # //Changed!
-            return normalize_cell_text(await loc.first.inner_text())  # //Changed!
-    except Exception:  # //Changed!
-        pass  # //Changed!
+async def _extract_pris_text_from_section(section) -> str: 
+    try: 
+        loc = section.get_by_text(re.compile(r"\bPris\s*:", re.I)) 
+        if await loc.count() > 0: 
+            return normalize_cell_text(await loc.first.inner_text()) 
+    except Exception: 
+        pass 
 
-    try:  # //Changed!
-        loc = section.locator("xpath=.//*[contains(., 'Pris:') or contains(., 'PRIS:')]")  # //Changed!
-        if await loc.count() > 0:  # //Changed!
-            return normalize_cell_text(await loc.first.inner_text())  # //Changed!
-    except Exception:  # //Changed!
-        pass  # //Changed!
+    try: 
+        loc = section.locator("xpath=.//*[contains(., 'Pris:') or contains(., 'PRIS:')]") 
+        if await loc.count() > 0: 
+            return normalize_cell_text(await loc.first.inner_text()) 
+    except Exception: 
+        pass 
 
-    return ""  # //Changed!
+    return "" 
 
-async def scrape_page(page, url: str) -> List[Row]:  # //Changed!
-    logging.info("  goto %s", url)  # //Changed!
-    await page.goto(url, timeout=60_000, wait_until="domcontentloaded")  # //Changed!
+async def scrape_page(page, url: str) -> List[Row]: 
+    logging.info("  goto %s", url) 
+    await page.goto(url, timeout=60_000, wait_until="domcontentloaded") 
     logging.info("  landed %s", page.url)
 
-    logging.info("  waiting for grid...")  # //Changed!
-    await page.wait_for_selector("div[role='row'][data-rowindex]", timeout=15_000)  # //Changed!
-    logging.info("  grid found")  # //Changed!
+    logging.info("  waiting for grid...") 
+    await page.wait_for_selector("div[role='row'][data-rowindex]", timeout=15_000) 
+    logging.info("  grid found") 
 
     nav = page.locator("div[class*='RaceDayNavigator_title'] span")
     if await nav.count() < 2:
@@ -321,11 +300,11 @@ async def scrape_page(page, url: str) -> List[Row]:  # //Changed!
     data: List[Row] = []
     lopp_headers = page.locator("//h2[starts-with(normalize-space(),'Lopp')]")
     header_count = await lopp_headers.count()
-    logging.info("  found %d lopp headers", header_count)  # //Changed!
+    logging.info("  found %d lopp headers", header_count) 
 
     for i in range(header_count):
         header = lopp_headers.nth(i)
-        await header.scroll_into_view_if_needed()  # //Changed!
+        await header.scroll_into_view_if_needed() 
         m = re.search(r"Lopp\s+(\d+)", normalize_cell_text(await header.inner_text()))
         if not m:
             continue
@@ -333,8 +312,8 @@ async def scrape_page(page, url: str) -> List[Row]:  # //Changed!
 
         section = header.locator("xpath=ancestor::div[contains(@class,'MuiBox-root')][1]")
 
-        pris_text = await _extract_pris_text_from_section(section)  # //Changed!
-        prizes, min_pris, _ = parse_pris_text(pris_text)  # //Changed!
+        pris_text = await _extract_pris_text_from_section(section) 
+        prizes, min_pris, _ = parse_pris_text(pris_text) 
 
         rows = await section.locator("div[role='row'][data-rowindex]").all()
         if not rows:
@@ -350,14 +329,14 @@ async def scrape_page(page, url: str) -> List[Row]:  # //Changed!
             nr = int(nr_m.group(0))
 
             namn_raw = normalize_cell_text(await cell("horse").locator("span").first.inner_text())
-            namn = normalize_name(namn_raw.split("(")[0])  # //Changed! (removes apostrophes inside normalize_name)
+            namn = normalize_name(namn_raw.split("(")[0])
 
             kusk = ""
             try:
                 drv = cell("driver")
                 a = drv.locator("a")
                 kusk_raw = (await a.first.inner_text()).strip() if await a.count() > 0 else normalize_cell_text(await drv.inner_text())
-                kusk = normalize_kusk(kusk_raw)  # //Changed! (removes apostrophes inside normalize_kusk)
+                kusk = normalize_kusk(kusk_raw) 
             except Exception:
                 kusk = ""
 
@@ -372,16 +351,16 @@ async def scrape_page(page, url: str) -> List[Row]:  # //Changed!
 
             pris = pris_for_placering(placering, prizes, min_pris)
 
-            odds = None  # //Changed!
-            try:  # //Changed!
-                odds_cell = cell("odds")  # //Changed!
-                if await odds_cell.count() > 0:  # //Changed!
-                    odds_txt = normalize_cell_text(await odds_cell.inner_text())  # //Changed!
-                    mm = re.search(r"\d+", odds_txt)  # //Changed!
-                    if mm:  # //Changed!
-                        odds = int(mm.group(0))  # //Changed!
-            except Exception:  # //Changed!
-                odds = None  # //Changed!
+            odds = None 
+            try: 
+                odds_cell = cell("odds") 
+                if await odds_cell.count() > 0: 
+                    odds_txt = normalize_cell_text(await odds_cell.inner_text()) 
+                    mm = re.search(r"\d+", odds_txt) 
+                    if mm: 
+                        odds = int(mm.group(0)) 
+            except Exception: 
+                odds = None 
 
             data.append(Row(
                 datum=datum,
@@ -404,22 +383,17 @@ async def scrape_page(page, url: str) -> List[Row]:  # //Changed!
     return data
 
 
-# ---------------------------
-# DB write (sync) - körs i thread
-# ---------------------------
 
-def write_rows_to_db(rows: List[Row]) -> int:  # //Changed!
-    created_n = 0  # //Changed!
-    updated_n = 0  # //Changed!
-    unchanged_n = 0  # //Changed!
+def write_rows_to_db(rows: List[Row]) -> int: 
+    created_n = 0 
+    updated_n = 0 
+    unchanged_n = 0 
 
-    for r in rows:  # //Changed!
-        # r.namn är redan normalize_name() från scrape_page,
-        # men vi kör igen för säkerhets skull (idempotent).  # //Changed!
-        namn_clean = normalize_name(r.namn)  # //Changed!
+    for r in rows: 
+        namn_clean = normalize_name(r.namn) 
 
-        try:  # //Changed!
-            obj, created = HorseResult.objects.get_or_create(  # //Changed!
+        try: 
+            obj, created = HorseResult.objects.get_or_create( 
                 datum=r.datum,
                 bankod=r.bankod,
                 lopp=r.lopp,
@@ -433,20 +407,20 @@ def write_rows_to_db(rows: List[Row]) -> int:  # //Changed!
                     startmetod=r.startmetod,
                     galopp=r.galopp,
                     underlag=r.underlag,
-                    kusk=normalize_kusk(r.kusk),  # //Changed!
+                    kusk=normalize_kusk(r.kusk), 
                     pris=r.pris,
                     odds=(r.odds if (r.odds not in (None, 999)) else 999),
                 ),
             )
-        except IntegrityError as e:  # //Changed!
-            logging.exception("DB IntegrityError for (%s,%s,L%s,%s): %s", r.datum, r.bankod, r.lopp, namn_clean, e)  # //Changed!
-            continue  # //Changed!
+        except IntegrityError as e: 
+            logging.exception("DB IntegrityError for (%s,%s,L%s,%s): %s", r.datum, r.bankod, r.lopp, namn_clean, e) 
+            continue 
 
-        if created:  # //Changed!
-            created_n += 1  # //Changed!
-            continue  # //Changed!
+        if created: 
+            created_n += 1 
+            continue 
 
-        changed_fields = []  # //Changed!
+        changed_fields = [] 
 
         if obj.nr != r.nr:
             obj.nr = r.nr
@@ -480,10 +454,10 @@ def write_rows_to_db(rows: List[Row]) -> int:  # //Changed!
             obj.underlag = (r.underlag or "")
             changed_fields.append("underlag")
 
-        kusk_clean = normalize_kusk(r.kusk)  # //Changed!
-        if obj.kusk != (kusk_clean or ""):  # //Changed!
-            obj.kusk = (kusk_clean or "")  # //Changed!
-            changed_fields.append("kusk")  # //Changed!
+        kusk_clean = normalize_kusk(r.kusk) 
+        if obj.kusk != (kusk_clean or ""): 
+            obj.kusk = (kusk_clean or "") 
+            changed_fields.append("kusk") 
 
         if obj.pris != r.pris:
             obj.pris = r.pris
@@ -502,63 +476,55 @@ def write_rows_to_db(rows: List[Row]) -> int:  # //Changed!
         else:
             unchanged_n += 1
 
-    logging.info("  db_created=%d db_updated=%d db_unchanged=%d", created_n, updated_n, unchanged_n)  # //Changed!
-    return created_n + updated_n  # //Changed!
+    logging.info("  db_created=%d db_updated=%d db_unchanged=%d", created_n, updated_n, unchanged_n) 
+    return created_n + updated_n 
 
 
-# ---------------------------
-# Main async runner
-# ---------------------------
 
-async def run_range(start_id: int, end_id: int) -> int:  # //Changed!
-    base = "https://sportapp.travsport.se/race/raceday/ts{}/results/all"  # //Changed!
-    total_scraped = 0  # //Changed!
+async def run_range(start_id: int, end_id: int) -> int: 
+    base = "https://sportapp.travsport.se/race/raceday/ts{}/results/all" 
+    total_scraped = 0 
 
-    async with async_playwright() as p:  # //Changed!
-        browser = await p.chromium.launch(headless=True)  # //Changed!
-        ctx = await browser.new_context()  # //Changed!
-        ctx.set_default_timeout(120_000)  # //Changed!
-        page = await ctx.new_page()  # //Changed!
+    async with async_playwright() as p: 
+        browser = await p.chromium.launch(headless=True) 
+        ctx = await browser.new_context() 
+        ctx.set_default_timeout(120_000) 
+        page = await ctx.new_page() 
 
-        try:  # //Changed!
-            for ts_id in range(start_id, end_id + 1):  # //Changed!
-                url = base.format(ts_id)  # //Changed!
-                logging.info("Scraping %s", url)  # //Changed!
+        try: 
+            for ts_id in range(start_id, end_id + 1): 
+                url = base.format(ts_id) 
+                logging.info("Scraping %s", url) 
 
-                try:  # //Changed!
-                    rows = await scrape_page(page, url)  # //Changed!
-                except PlaywrightError as exc:  # //Changed!
-                    logging.warning("  failed: %s", exc)  # //Changed!
-                    continue  # //Changed!
-                except Exception as exc:  # //Changed!
-                    logging.warning("  failed: %s", exc)  # //Changed!
-                    continue  # //Changed!
+                try: 
+                    rows = await scrape_page(page, url) 
+                except PlaywrightError as exc: 
+                    logging.warning("  failed: %s", exc) 
+                    continue 
+                except Exception as exc: 
+                    logging.warning("  failed: %s", exc) 
+                    continue 
 
-                logging.info("  scraped_rows=%d", len(rows))  # //Changed!
+                logging.info("  scraped_rows=%d", len(rows)) 
                 if not rows:
                     continue
 
-                total_scraped += len(rows)  # //Changed!
+                total_scraped += len(rows) 
 
-                await asyncio.to_thread(write_rows_to_db, rows)  # //Changed!
+                await asyncio.to_thread(write_rows_to_db, rows) 
 
-        finally:  # //Changed!
-            await ctx.close()  # //Changed!
-            await browser.close()  # //Changed!
+        finally: 
+            await ctx.close() 
+            await browser.close() 
 
-    return total_scraped  # //Changed!
-
-
-# ---------------------------
-# Django management command
-# ---------------------------
+    return total_scraped 
 
 class Command(BaseCommand):
     help = "Scrape hard-coded ts-ID range into Result"
 
-    START_ID = 610_005
-    END_ID = 610_420
+    START_ID = 610_380
+    END_ID = 610_410
 
     def handle(self, *args, **opts):
-        total = asyncio.run(run_range(self.START_ID, self.END_ID))  # //Changed!
-        self.stdout.write(self.style.SUCCESS(f"Done. {total} rows scraped & processed."))  # //Changed!
+        total = asyncio.run(run_range(self.START_ID, self.END_ID)) 
+        self.stdout.write(self.style.SUCCESS(f"Done. {total} rows scraped & processed.")) 
