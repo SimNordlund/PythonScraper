@@ -230,7 +230,7 @@ def upsert_resultat_from_startrow(r: StartRow):
 
 
 class Command(BaseCommand):
-    START_ID = 609_601
+    START_ID = 610_390
     END_ID   = 610_450
     
     # Slutade ts609932

@@ -521,16 +521,22 @@ async def run_range(start_id: int, end_id: int) -> int:
 
 class Command(BaseCommand):
     help = "Scrape hard-coded ts-ID range into Result"
-
     
-    START_ID = 605_104
-    END_ID = 605_919
+    START_ID = 600_569
+    END_ID = 601_432
     
-    #Slutade ts605508 
+    #START_ID = 610_390
+    #END_ID = 610_420
+    
+    #605_589 buggar wtf? Pris och grandprix? 
+    #Slutade tts605584
     
     # Första januari 2024 ID: 605104
     # Sista december 2024 ID: 605919
     # 1 januari 2025 ID: 609600
+    
+    # Fösta januari 2023 ts600569
+    # Sista decemer 2023 ts601432
 
     def handle(self, *args, **opts):
         total = asyncio.run(run_range(self.START_ID, self.END_ID)) 
