@@ -522,11 +522,11 @@ async def run_range(start_id: int, end_id: int) -> int:
 class Command(BaseCommand):
     help = "Scrape hard-coded ts-ID range into Result"
     
-    START_ID = 600_569
-    END_ID = 601_432
+    #START_ID = 600_569
+    #END_ID = 601_432
     
-    #START_ID = 610_390
-    #END_ID = 610_420
+    START_ID = 610_405
+    END_ID = 610_435
     
     #605_589 buggar wtf? Pris och grandprix? 
     #Slutade tts605584
