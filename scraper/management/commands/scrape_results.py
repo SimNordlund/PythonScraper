@@ -278,14 +278,14 @@ async def _extract_pris_text_from_section(section) -> str:
 
     return "" 
 
-async def scrape_page(page, url: str) -> List[Row]: 
-    logging.info("  goto %s", url) 
-    await page.goto(url, timeout=60_000, wait_until="domcontentloaded") 
+async def scrape_page(page, url: str) -> List[Row]:
+    logging.info("  goto %s", url)
+    await page.goto(url, timeout=60_000, wait_until="domcontentloaded")
     logging.info("  landed %s", page.url)
 
-    logging.info("  waiting for grid...") 
-    await page.wait_for_selector("div[role='row'][data-rowindex]", timeout=15_000) 
-    logging.info("  grid found") 
+    logging.info("  waiting for grid...")
+    await page.wait_for_selector("div[role='row'][data-rowindex]", timeout=15_000)
+    logging.info("  grid found")
 
     nav = page.locator("div[class*='RaceDayNavigator_title'] span")
     if await nav.count() < 2:
@@ -300,11 +300,11 @@ async def scrape_page(page, url: str) -> List[Row]:
     data: List[Row] = []
     lopp_headers = page.locator("//h2[starts-with(normalize-space(),'Lopp')]")
     header_count = await lopp_headers.count()
-    logging.info("  found %d lopp headers", header_count) 
+    logging.info("  found %d lopp headers", header_count)
 
     for i in range(header_count):
         header = lopp_headers.nth(i)
-        await header.scroll_into_view_if_needed() 
+        await header.scroll_into_view_if_needed()
         m = re.search(r"Lopp\s+(\d+)", normalize_cell_text(await header.inner_text()))
         if not m:
             continue
@@ -312,8 +312,8 @@ async def scrape_page(page, url: str) -> List[Row]:
 
         section = header.locator("xpath=ancestor::div[contains(@class,'MuiBox-root')][1]")
 
-        pris_text = await _extract_pris_text_from_section(section) 
-        prizes, min_pris, _ = parse_pris_text(pris_text) 
+        pris_text = await _extract_pris_text_from_section(section)
+        prizes, min_pris, _ = parse_pris_text(pris_text)
 
         rows = await section.locator("div[role='row'][data-rowindex]").all()
         if not rows:
@@ -334,9 +334,21 @@ async def scrape_page(page, url: str) -> List[Row]:
             kusk = ""
             try:
                 drv = cell("driver")
-                a = drv.locator("a")
-                kusk_raw = (await a.first.inner_text()).strip() if await a.count() > 0 else normalize_cell_text(await drv.inner_text())
-                kusk = normalize_kusk(kusk_raw) 
+                kusk_raw = await drv.evaluate(  # //Changed!
+                    """
+                    (el) => {
+                      const links = Array.from(el.querySelectorAll("a"));
+                      if (!links.length) return (el.textContent || "").trim();
+
+                      // Prefer link not inside a "linethrough" container (old/struken kusk)
+                      const active = links.filter(a => !a.closest("[class*='linethrough']"));
+                      const pick = (active.length ? active : links)[(active.length ? active : links).length - 1];
+
+                      return (pick.textContent || "").trim();
+                    }
+                    """
+                )  # //Changed!
+                kusk = normalize_kusk(kusk_raw)  # //Changed!
             except Exception:
                 kusk = ""
 
@@ -351,16 +363,16 @@ async def scrape_page(page, url: str) -> List[Row]:
 
             pris = pris_for_placering(placering, prizes, min_pris)
 
-            odds = None 
-            try: 
-                odds_cell = cell("odds") 
-                if await odds_cell.count() > 0: 
-                    odds_txt = normalize_cell_text(await odds_cell.inner_text()) 
-                    mm = re.search(r"\d+", odds_txt) 
-                    if mm: 
-                        odds = int(mm.group(0)) 
-            except Exception: 
-                odds = None 
+            odds = None
+            try:
+                odds_cell = cell("odds")
+                if await odds_cell.count() > 0:
+                    odds_txt = normalize_cell_text(await odds_cell.inner_text())
+                    mm = re.search(r"\d+", odds_txt)
+                    if mm:
+                        odds = int(mm.group(0))
+            except Exception:
+                odds = None
 
             data.append(Row(
                 datum=datum,
@@ -381,8 +393,6 @@ async def scrape_page(page, url: str) -> List[Row]:
             ))
 
     return data
-
-
 
 def write_rows_to_db(rows: List[Row]) -> int: 
     created_n = 0 
@@ -479,8 +489,6 @@ def write_rows_to_db(rows: List[Row]) -> int:
     logging.info("  db_created=%d db_updated=%d db_unchanged=%d", created_n, updated_n, unchanged_n) 
     return created_n + updated_n 
 
-
-
 async def run_range(start_id: int, end_id: int) -> int: 
     base = "https://sportapp.travsport.se/race/raceday/ts{}/results/all" 
     total_scraped = 0 
@@ -525,7 +533,7 @@ class Command(BaseCommand):
     #START_ID = 600_569
     #END_ID = 601_432
     
-    START_ID = 610_405
+    START_ID = 610_380
     END_ID = 610_435
     
     #605_589 buggar wtf? Pris och grandprix? 
