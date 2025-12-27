@@ -452,8 +452,9 @@ def write_rows_to_db(rows: List[Row]) -> int:
             obj.tid = r.tid
             changed_fields.append("tid")
 
-        if obj.startmetod != (r.startmetod or ""):
-            obj.startmetod = (r.startmetod or "")
+        incoming_startmetod = (r.startmetod or "").strip() 
+        if incoming_startmetod and obj.startmetod != incoming_startmetod: 
+            obj.startmetod = incoming_startmetod 
             changed_fields.append("startmetod")
 
         if obj.galopp != (r.galopp or ""):
