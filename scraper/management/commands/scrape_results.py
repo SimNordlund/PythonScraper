@@ -131,7 +131,7 @@ def parse_tid_cell(raw: str):
     startmetod = "a" if "a" in letters else "" 
     galopp = "g" if "g" in letters else "" 
 
-    force99 = ("dist" in letters) or ("kub" in letters) or ("vmk" in letters) or ("u" in letters) or ("d" in letters) 
+    force99 = ("dist" in letters) or ("kub" in letters) or ("vmk" in letters) or ("u" in letters) or ("d" in letters) or ("it" in letters) 
 
     tid = None 
     m = TIME_VALUE.search(t2) 
