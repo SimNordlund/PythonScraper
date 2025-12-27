@@ -17,7 +17,7 @@ class HorseResult(models.Model):
     tid         = models.FloatField(null=True, blank=True, db_column="tid")
     startmetod  = models.CharField(max_length=1, blank=True, db_column="startmetod")
     galopp      = models.CharField(max_length=1, blank=True, db_column="galopp")
-    underlag    = models.CharField(max_length=2, blank=True, db_column="underlag")
+    underlag    = models.CharField(max_length=3, blank=True, db_column="underlag")
 
     ny_tid      = models.FloatField(null=True, blank=True, db_column="nytid")
     diff_tid    = models.FloatField(null=True, blank=True, db_column="difftid")

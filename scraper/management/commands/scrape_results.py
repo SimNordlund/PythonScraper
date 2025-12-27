@@ -52,7 +52,7 @@ def sanitize_underlag(raw: str) -> str:
     t = t.replace("(", "").replace(")", "")  
     t = re.sub(r"\s+", "", t)  
     t = re.sub(r"[^a-z]", "", t)  
-    return t[:2]  
+    return t[:3]  
 
 
 dist_slash_re = re.compile(r"^\s*(\d{1,2})\s*/\s*(\d{3,4})\s*([a-zA-Z() \u00a0]*)\s*$", re.I)  
@@ -334,7 +334,7 @@ async def scrape_page(page, url: str) -> List[Row]:
             kusk = ""
             try:
                 drv = cell("driver")
-                kusk_raw = await drv.evaluate(  # //Changed!
+                kusk_raw = await drv.evaluate( 
                     """
                     (el) => {
                       const links = Array.from(el.querySelectorAll("a"));
@@ -347,8 +347,8 @@ async def scrape_page(page, url: str) -> List[Row]:
                       return (pick.textContent || "").trim();
                     }
                     """
-                )  # //Changed!
-                kusk = normalize_kusk(kusk_raw)  # //Changed!
+                )  
+                kusk = normalize_kusk(kusk_raw)  
             except Exception:
                 kusk = ""
 
@@ -460,9 +460,12 @@ def write_rows_to_db(rows: List[Row]) -> int:
             obj.galopp = (r.galopp or "")
             changed_fields.append("galopp")
 
-        if obj.underlag != (r.underlag or ""):
-            obj.underlag = (r.underlag or "")
-            changed_fields.append("underlag")
+        incoming_underlag = (r.underlag or "").strip().lower()        
+        existing_underlag = (obj.underlag or "").strip().lower()      
+
+        if not existing_underlag and incoming_underlag:               
+            obj.underlag = incoming_underlag                          
+            changed_fields.append("underlag")                         
 
         kusk_clean = normalize_kusk(r.kusk) 
         if obj.kusk != (kusk_clean or ""): 
@@ -533,7 +536,7 @@ class Command(BaseCommand):
     #START_ID = 600_569
     #END_ID = 601_432
     
-    START_ID = 610_380
+    START_ID = 610_400
     END_ID = 610_435
     
     #605_589 buggar wtf? Pris och grandprix? 
