@@ -152,9 +152,18 @@ def parse_tid_cell(raw: str):
 
     return tid, startmetod, galopp 
 
-PRIS_LINE_RE = re.compile(r"\bPris\s*:\s*(.+?)\bkr\b", re.IGNORECASE | re.DOTALL) 
-PRISPLACERADE_RE = re.compile(r"\((\d+)\s*prisplacerade\)", re.IGNORECASE) 
-LAGST_RE = re.compile(r"Lägst\s+([0-9][0-9\.\s\u00a0]*)\s*kr", re.IGNORECASE) 
+PRIS_PREFIX_RE = re.compile(r"\bPris\s*:\s*", re.IGNORECASE)
+LEADING_PRIZES_RE = re.compile(  
+    r"^\s*([0-9][0-9\.\s\u00a0]*(?:\s*[-–—]\s*[0-9][0-9\.\s\u00a0]*)*)"
+)
+DASH_SPLIT_RE = re.compile(r"\s*[-–—]\s*")  
+SAMT_TILL_OVRIGA_RE = re.compile(  
+    r"\bsamt\s+([0-9][0-9\.\s\u00a0]*)\s*kr\s+till\s+övriga\b",
+    re.IGNORECASE
+)
+
+PRISPLACERADE_RE = re.compile(r"\((\d+)\s*prisplacerade\)", re.IGNORECASE)
+LAGST_RE = re.compile(r"Lägst\s+([0-9][0-9\.\s\u00a0]*)\s*kr", re.IGNORECASE)
 
 def _parse_swe_int(token: str) -> Optional[int]: 
     if token is None: 
@@ -171,48 +180,60 @@ def _parse_swe_int(token: str) -> Optional[int]:
     except ValueError: 
         return None 
 
-def parse_pris_text(full_text: str) -> Tuple[List[int], Optional[int], Optional[int]]: 
-    text = normalize_cell_text(full_text) 
-    if not text: 
-        return [], None, None 
+def parse_pris_text(full_text: str) -> Tuple[List[int], Optional[int], Optional[int]]:
+    text = normalize_cell_text(full_text)
+    if not text:
+        return [], None, None
 
-    m = PRIS_LINE_RE.search(text) 
-    if not m: 
-        return [], _parse_swe_int(LAGST_RE.search(text).group(1)) if LAGST_RE.search(text) else None, None 
+    m0 = PRIS_PREFIX_RE.search(text)  
+    if not m0:  
+        ml0 = LAGST_RE.search(text)  
+        return [], _parse_swe_int(ml0.group(1)) if ml0 else None, None  
 
-    prize_part = normalize_cell_text(m.group(1)) 
+    after = text[m0.end():]  
 
-    prizes: List[int] = [] 
-    for raw_tok in prize_part.split("-"): 
-        v = _parse_swe_int(raw_tok) 
-        if v is None: 
-            continue 
-        prizes.append(v) 
+    prizes: List[int] = []  
+    m1 = LEADING_PRIZES_RE.match(after)  
+    if m1:  
+        for raw_tok in DASH_SPLIT_RE.split(m1.group(1)):  
+            v = _parse_swe_int(raw_tok)  
+            if v is not None:  
+                prizes.append(v)  
 
-    pn = None 
-    mp = PRISPLACERADE_RE.search(text) 
-    if mp: 
-        try: 
-            pn = int(mp.group(1)) 
-        except ValueError: 
-            pn = None 
+    pn = None
+    mp = PRISPLACERADE_RE.search(text)
+    if mp:
+        try:
+            pn = int(mp.group(1))
+        except ValueError:
+            pn = None
 
-    min_pris = None 
-    ml = LAGST_RE.search(text) 
-    if ml: 
-        min_pris = _parse_swe_int(ml.group(1)) 
+    min_pris = None
+    ml = LAGST_RE.search(text)
+    if ml:
+        min_pris = _parse_swe_int(ml.group(1))
 
-    return prizes, min_pris, pn 
+    mo = SAMT_TILL_OVRIGA_RE.search(text)  
+    if mo:  
+        extra = _parse_swe_int(mo.group(1))  
+        if extra is not None:  
+            min_pris = extra if min_pris is None else max(min_pris, extra)  
 
-def pris_for_placering(placering: Optional[int], prizes: List[int], min_pris: Optional[int]) -> int: 
-    if placering is None or placering == 99 or placering <= 0: 
-        return 0 
-    if prizes: 
-        if placering <= len(prizes): 
-            return prizes[placering - 1] 
-        if min_pris is not None: 
-            return int(min_pris) 
-    return 0 
+    return prizes, min_pris, pn
+
+
+def pris_for_placering(placering: Optional[int], prizes: List[int], min_pris: Optional[int]) -> int:
+    if placering is None or placering == 99 or placering <= 0:
+        return 0
+
+    if prizes:
+        if placering <= len(prizes):
+            return prizes[placering - 1]
+        if min_pris is not None:
+            return int(min_pris)
+        return 0
+
+    return int(min_pris) if min_pris is not None else 0  
 
 
 FULLNAME_TO_BANKOD = {
@@ -534,17 +555,17 @@ async def run_range(start_id: int, end_id: int) -> int:
 class Command(BaseCommand):
     help = "Scrape hard-coded ts-ID range into Result"
     
-    #START_ID = 600_569
-    #END_ID = 601_432
+    START_ID = 609_600
+    END_ID = 610_420
     
-    START_ID = 610_400
-    END_ID = 610_435
+    #START_ID = 610_400
+    #END_ID = 610_420
     
-    #605_589 buggar wtf? Pris och grandprix? 
-    #Slutade tts605584
+    #605_589 buggar wtf? Pris och grandprix? Flera buggar i DB får kika på det också
     
     # Första januari 2024 ID: 605104
     # Sista december 2024 ID: 605919
+    
     # 1 januari 2025 ID: 609600
     
     # Fösta januari 2023 ts600569
