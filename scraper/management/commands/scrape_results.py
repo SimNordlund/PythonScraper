@@ -560,19 +560,18 @@ async def run_range(start_id: int, end_id: int) -> int:
 
 class Command(BaseCommand):
     help = "Scrape hard-coded ts-ID range into Result"
-    
-    START_ID = 609_600
+
+    #START_ID = 600_569
+    #END_ID = 601_432
+
+    START_ID = 610_400
     END_ID = 610_420
     
-    #START_ID = 610_380
-    #END_ID = 610_420
-    
-    #605_589 buggar wtf? Pris och grandprix? Flera buggar i DB får kika på det också
+    # 1 januari 2025 ID: 609600
+    # sista dc 2925 ID  610418
     
     # Första januari 2024 ID: 605104
     # Sista december 2024 ID: 605919
-    
-    # 1 januari 2025 ID: 609600
     
     # Fösta januari 2023 ts600569
     # Sista decemer 2023 ts601432

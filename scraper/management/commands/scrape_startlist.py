@@ -1,11 +1,11 @@
 import asyncio, re, unicodedata, logging
 from dataclasses import dataclass
-from typing import List, Optional  
-from datetime import date  
-from django.utils import timezone  
+from typing import List, Optional
+from datetime import date
+from django.utils import timezone
 from playwright.async_api import async_playwright, Error as PlaywrightError
 from django.core.management.base import BaseCommand
-from scraper.models import StartList, HorseResult  
+from scraper.models import StartList, HorseResult
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
@@ -22,41 +22,41 @@ def swedish_date_to_yyyymmdd(txt: str) -> str:
     return f"{int(y):04d}{SWEDISH_MONTH[m]:02d}{int(d):02d}"
 
 
-def normalize_cell_text(s: str) -> str:  
-    if s is None:  
-        return ""  
-    return s.replace("\u00a0", " ").strip()  
+def normalize_cell_text(s: str) -> str:
+    if s is None:
+        return ""
+    return s.replace("\u00a0", " ").strip()
 
-def trim_to_max(s: str, max_len: int) -> str:  
-    s = s or ""  
-    return s if len(s) <= max_len else s[:max_len]  
+def trim_to_max(s: str, max_len: int) -> str:
+    s = s or ""
+    return s if len(s) <= max_len else s[:max_len]
 
-_paren_re = re.compile(r"\([^)]*\)") 
+_paren_re = re.compile(r"\([^)]*\)")
 
-def normalize_startlista_name(name: str) -> str:  
-    cleaned = normalize_cell_text(name)  
+def normalize_startlista_name(name: str) -> str:
+    cleaned = normalize_cell_text(name)
 
-    cleaned = cleaned.replace("*", "")  
-    cleaned = cleaned.replace("'", "").replace("’", "") 
-    cleaned = _paren_re.sub("", cleaned)  
+    cleaned = cleaned.replace("*", "")
+    cleaned = cleaned.replace("'", "").replace("’", "")
+    cleaned = _paren_re.sub("", cleaned)
 
-    if len(cleaned) >= 7:  
-        cleaned = cleaned[:-7] 
+    if len(cleaned) >= 7:
+        cleaned = cleaned[:-7]
 
-    cleaned = cleaned.rstrip() 
-    cleaned = cleaned.upper() 
+    cleaned = cleaned.rstrip()
+    cleaned = cleaned.upper()
 
-    return trim_to_max(cleaned, 50)  
+    return trim_to_max(cleaned, 50)
 
-def normalize_kusk(kusk: str, max_len: int) -> str:  
-    cleaned = re.sub(r"\s+", " ", normalize_cell_text(kusk)).strip()  
-    return trim_to_max(cleaned, max_len)  
+def normalize_kusk(kusk: str, max_len: int) -> str:
+    cleaned = re.sub(r"\s+", " ", normalize_cell_text(kusk)).strip()
+    return trim_to_max(cleaned, max_len)
 
 
 dist_re = re.compile(r"\s*(\d+)\s*/\s*([\d,]+)", re.I)
 
 def parse_dist_spar(txt: str):
-    t = normalize_cell_text(txt)  
+    t = normalize_cell_text(txt)
     m = dist_re.match(t)
     if not m:
         return None, None
@@ -81,7 +81,7 @@ FULLNAME_TO_BANKOD = {
 FULLNAME_TO_BANKOD |= {_strip(k): v for k, v in FULLNAME_TO_BANKOD.items()}
 
 def track_to_bankod(n: str) -> str:
-    n = normalize_cell_text(n).upper()  
+    n = normalize_cell_text(n).upper()
     return FULLNAME_TO_BANKOD.get(n, FULLNAME_TO_BANKOD.get(_strip(n), n[:2].title()))
 
 
@@ -95,6 +95,7 @@ class StartRow:
     spar: Optional[int]
     distans: Optional[int]
     kusk: str
+    struken: bool
 
 
 async def scrape_startlist(url: str) -> List[StartRow]:
@@ -121,14 +122,13 @@ async def scrape_startlist(url: str) -> List[StartRow]:
             await browser.close()
             return []
 
-        raw_track = normalize_cell_text(await nav.nth(0).inner_text()).upper()  
+        raw_track = normalize_cell_text(await nav.nth(0).inner_text()).upper()
         if raw_track.startswith(("TÄVLINGSDAG", "TRAVTÄVLING")):
             parts = raw_track.split(maxsplit=1)
             raw_track = parts[1] if len(parts) > 1 else raw_track
 
         bankod = track_to_bankod(raw_track)
-
-        startdatum = int(swedish_date_to_yyyymmdd(normalize_cell_text(await nav.nth(1).inner_text())))  
+        startdatum = int(swedish_date_to_yyyymmdd(normalize_cell_text(await nav.nth(1).inner_text())))
 
         out: List[StartRow] = []
         lopp_headers = page.locator("//h2[starts-with(normalize-space(),'Lopp')]")
@@ -148,19 +148,22 @@ async def scrape_startlist(url: str) -> List[StartRow]:
             for row in rows:
                 cell = lambda f: row.locator(f"div[data-field='{f}']")
 
-                nr_txt = normalize_cell_text(await cell("horse").locator("div").first.inner_text())  
-                nr_m = re.search(r"\d+", nr_txt)  
-                if not nr_m:  
-                    continue  
-                nr = int(nr_m.group(0))  
+                horse_cell = cell("horse") 
+                is_struken = (await horse_cell.locator("span[class*='Text_linethrough']").count()) > 0  
 
-                namn_raw = normalize_cell_text(await cell("horse").locator("span").first.inner_text())  
-                namn = normalize_startlista_name(namn_raw)  
+                nr_txt = normalize_cell_text(await horse_cell.locator("div").first.inner_text())
+                nr_m = re.search(r"\d+", nr_txt)
+                if not nr_m:
+                    continue
+                nr = int(nr_m.group(0))
 
-                kusk_raw = normalize_cell_text(await cell("driver").inner_text())  
-                kusk = normalize_kusk(kusk_raw, 120) 
+                namn_raw = normalize_cell_text(await horse_cell.locator("span").first.inner_text())
+                namn = normalize_startlista_name(namn_raw)
 
-                dist_raw = normalize_cell_text(await cell("trackName").inner_text())  
+                kusk_raw = normalize_cell_text(await cell("driver").inner_text())
+                kusk = normalize_kusk(kusk_raw, 120)
+
+                dist_raw = normalize_cell_text(await cell("trackName").inner_text())
                 distans, spar = parse_dist_spar(dist_raw)
 
                 out.append(StartRow(
@@ -172,77 +175,78 @@ async def scrape_startlist(url: str) -> List[StartRow]:
                     spar=spar,
                     distans=distans,
                     kusk=kusk,
+                    struken=is_struken,
                 ))
 
         await browser.close()
         return out
 
-def _today_yyyymmdd() -> int:  
-    d: date = timezone.localdate()  
-    return d.year * 10000 + d.month * 100 + d.day  
+def _today_yyyymmdd() -> int:
+    d: date = timezone.localdate()
+    return d.year * 10000 + d.month * 100 + d.day
 
-def upsert_resultat_from_startrow(r: StartRow):  
-    namn_clean = r.namn  
-    kusk_res = normalize_kusk(r.kusk, 80)  
 
-    obj, created = HorseResult.objects.get_or_create(  
-        datum=r.startdatum,  
-        bankod=r.bankod,  
-        lopp=r.lopp,  
-        namn=namn_clean,  
-        defaults=dict(  
-            nr=r.nr,  
-            distans=r.distans,  
-            spar=r.spar,  
-            kusk=kusk_res,  
-            placering=0,
-        ),  
-    )  
+def upsert_resultat_from_startrow(r: StartRow):
+    namn_clean = r.namn
+    kusk_res = normalize_kusk(r.kusk, 80)
 
-    if created:  
-        return  
+    desired_placering = 99 if r.struken else 0 
 
-    changed_fields = []  
+    obj, created = HorseResult.objects.get_or_create(
+        datum=r.startdatum,
+        bankod=r.bankod,
+        lopp=r.lopp,
+        namn=namn_clean,
+        defaults=dict(
+            nr=r.nr,
+            distans=r.distans,
+            spar=r.spar,
+            kusk=kusk_res,
+            placering=desired_placering, 
+        ),
+    )
 
-    if obj.nr != r.nr:  
-        obj.nr = r.nr  
-        changed_fields.append("nr")  
+    if created:
+        return
 
-    if r.distans is not None and obj.distans != r.distans:  
-        obj.distans = r.distans  
-        changed_fields.append("distans")  
+    changed_fields = []
 
-    if r.spar is not None and obj.spar != r.spar:  
-        obj.spar = r.spar  
-        changed_fields.append("spar")  
+    if obj.nr != r.nr:
+        obj.nr = r.nr
+        changed_fields.append("nr")
 
-    if kusk_res and obj.kusk != kusk_res:  
-        obj.kusk = kusk_res  
-        changed_fields.append("kusk")  
-        
-    if obj.placering is None:  
-        obj.placering = 0  
-        changed_fields.append("placering")  
+    if r.distans is not None and obj.distans != r.distans:
+        obj.distans = r.distans
+        changed_fields.append("distans")
 
-    if changed_fields:  
-        obj.save(update_fields=changed_fields)  
+    if r.spar is not None and obj.spar != r.spar:
+        obj.spar = r.spar
+        changed_fields.append("spar")
 
+    if kusk_res and obj.kusk != kusk_res:
+        obj.kusk = kusk_res
+        changed_fields.append("kusk")
+
+    if obj.placering is None or obj.placering in (0, 99):
+        if obj.placering != desired_placering:
+            obj.placering = desired_placering
+            changed_fields.append("placering")
+
+    if changed_fields:
+        obj.save(update_fields=changed_fields)
 
 
 class Command(BaseCommand):
-    START_ID = 610_410
-    END_ID   = 610_470
+    help = "Scrape hard-coded ts-ID range into Startlista (and also seed Resultat for today/future only)"
     
-    # Slutade ts609932
-    # 1 jan 2025 609601
-    
-    help = "Scrape hard-coded ts-ID range into Startlista (and also seed Resultat for today/future only)"  
+    START_ID = 616_057
+    END_ID   = 616_100
 
     def handle(self, *args, **kwargs):
         base = "https://sportapp.travsport.se/race/raceday/ts{}/startlist/all"
         total = 0
-        total_resultat = 0  
-        today_int = _today_yyyymmdd()  
+        total_resultat = 0
+        today_int = _today_yyyymmdd()
 
         for ts in range(self.START_ID, self.END_ID + 1):
             url = base.format(ts)
@@ -265,23 +269,23 @@ class Command(BaseCommand):
                     lopp=r.lopp,
                     nr=r.nr,
                     defaults=dict(
-                        namn=r.namn, 
+                        namn=r.namn,
                         spar=r.spar,
                         distans=r.distans,
-                        kusk=normalize_kusk(r.kusk, 120),  
+                        kusk=normalize_kusk(r.kusk, 120),
                     ),
                 )
 
-                if r.startdatum >= today_int:  
-                    upsert_resultat_from_startrow(r)  
-                    total_resultat += 1  
+                if r.startdatum >= today_int:
+                    upsert_resultat_from_startrow(r)
+                    total_resultat += 1
 
             total += len(rows)
             logging.info(
                 "  inserted/updated %d startlista rows (+%d resultat upserts, today=%d)",
-                len(rows), total_resultat, today_int  
+                len(rows), total_resultat, today_int
             )
 
         self.stdout.write(self.style.SUCCESS(
             f"Done. {total} startlista rows processed. {total_resultat} resultat upserts (today/future only)."
-        ))  
+        ))
