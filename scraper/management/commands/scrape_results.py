@@ -45,45 +45,82 @@ def normalize_kusk(kusk: str) -> str:
     cleaned = _APOSTROPHES_RE.sub("", cleaned) 
     return trim_to_max(cleaned, 80)   
 
-def sanitize_underlag(raw: str) -> str:  
-    t = normalize_cell_text(raw).lower()  
-    if not t:  
-        return ""  
-    t = t.replace("(", "").replace(")", "")  
-    t = re.sub(r"\s+", "", t)  
-    t = re.sub(r"[^a-z]", "", t)  
-    return t[:3]  
+def sanitize_underlag(raw: str) -> str:
+    """
+    Tar emot t.ex. "Vinterbana", "Något tung bana", "Tung bana", "Lätt bana" osv.
+    Returnerar:
+      v = Vinterbana
+      n = Något tung bana
+      t = Tung bana
+      "" = annars
+    """
+    value = normalize_cell_text(raw).lower().strip()  # //Changed!
+    if not value:
+        return ""
+
+    if "vinterbana" in value:
+        return "v"
+    if "något tung" in value:  # matcha före "tung"  # //Changed!
+        return "n"
+    if "tung" in value:
+        return "t"
+
+    return ""  # //Changed!
+
+async def _extract_banforhallande_value_from_section(section) -> str:
+    """
+    DOMen i dina screenshots:
+      <span> Banförhållande: </span><span>Vinterbana</span>
+
+    Returnerar själva värdet (t.ex. "Vinterbana") eller "" om det saknas.
+    """
+    try:
+        # Exakt enligt din DOM: label-span + syskon-span med värdet  # //Changed!
+        val = section.locator("span:has-text('Banförhållande:') + span")  # //Changed!
+        if await val.count() > 0:
+            return normalize_cell_text(await val.first.inner_text())  # //Changed!
+
+        # Fallback om kolon/whitespace skiljer sig lite  # //Changed!
+        label = section.locator("span:has-text('Banförhållande')")  # //Changed!
+        if await label.count() > 0:
+            sib = label.first.locator("xpath=following-sibling::span[1]")  # //Changed!
+            if await sib.count() > 0:
+                return normalize_cell_text(await sib.first.inner_text())  # //Changed!
+    except Exception:
+        pass
+
+    return ""  # //Changed!
+
+  
 
 
 dist_slash_re = re.compile(r"^\s*(\d{1,2})\s*/\s*(\d{3,4})\s*([a-zA-Z() \u00a0]*)\s*$", re.I)  
 dist_colon_re = re.compile(r"^\s*(\d{3,4})\s*:\s*(\d{1,2})\s*$", re.I)  
 dist_only_re = re.compile(r"^\s*(\d{3,4})\s*(?:m)?\s*$", re.I)  
 
-def parse_dist_spar(txt: str):  
-    t = normalize_cell_text(txt)  
-    if not t:  
-        return None, None, ""  
+def parse_dist_spar(txt: str):  # //Changed!
+    t = normalize_cell_text(txt)  # //Changed!
+    if not t:  # //Changed!
+        return None, None, ""  # //Changed!
 
-    m = dist_slash_re.match(t)  
-    if m:  
-        spar = int(m.group(1))  
-        distans = int(m.group(2))  
-        underlag = sanitize_underlag(m.group(3))  
-        return distans, spar, underlag  
+    m = dist_slash_re.match(t)  # //Changed!
+    if m:  # //Changed!
+        spar = int(m.group(1))  # //Changed!
+        distans = int(m.group(2))  # //Changed!
+        return distans, spar, ""  # //Changed!  # underlag hämtas INTE här längre
 
-    m = dist_colon_re.match(t)  
-    if m:  
-        distans = int(m.group(1))  
-        spar = int(m.group(2))  
-        return distans, spar, ""  
+    m = dist_colon_re.match(t)  # //Changed!
+    if m:  # //Changed!
+        distans = int(m.group(1))  # //Changed!
+        spar = int(m.group(2))  # //Changed!
+        return distans, spar, ""  # //Changed!
 
-    m = dist_only_re.match(t)  
-    if m:  
-        distans = int(m.group(1))  
-        return distans, 1, ""  
+    m = dist_only_re.match(t)  # //Changed!
+    if m:  # //Changed!
+        distans = int(m.group(1))  # //Changed!
+        return distans, 1, ""  # //Changed!
 
-    return None, None, ""  
-
+    return None, None, ""  # //Changed!
 
 placering_with_r = re.compile(r"^(\d{1,2})r$", re.I)  
 
@@ -305,7 +342,7 @@ async def _extract_pris_text_from_section(section) -> str:
 
     return "" 
 
-async def scrape_page(page, url: str) -> List[Row]:
+async def scrape_page(page, url: str) -> List[Row]:  # //Changed!
     logging.info("  goto %s", url)
     await page.goto(url, timeout=60_000, wait_until="domcontentloaded")
     logging.info("  landed %s", page.url)
@@ -342,6 +379,10 @@ async def scrape_page(page, url: str) -> List[Row]:
         pris_text = await _extract_pris_text_from_section(section)
         prizes, min_pris, _ = parse_pris_text(pris_text)
 
+        # HÄR ska underlag hämtas: "Banförhållande: <text>"  # //Changed!
+        ban_value = await _extract_banforhallande_value_from_section(section)  # //Changed!
+        underlag_for_lopp = sanitize_underlag(ban_value)  # //Changed!
+
         rows = await section.locator("div[role='row'][data-rowindex]").all()
         if not rows:
             continue
@@ -361,7 +402,7 @@ async def scrape_page(page, url: str) -> List[Row]:
             kusk = ""
             try:
                 drv = cell("driver")
-                kusk_raw = await drv.evaluate( 
+                kusk_raw = await drv.evaluate(
                     """
                     (el) => {
                       const links = Array.from(el.querySelectorAll("a"));
@@ -374,8 +415,8 @@ async def scrape_page(page, url: str) -> List[Row]:
                       return (pick.textContent || "").trim();
                     }
                     """
-                )  
-                kusk = normalize_kusk(kusk_raw)  
+                )
+                kusk = normalize_kusk(kusk_raw)
             except Exception:
                 kusk = ""
 
@@ -383,7 +424,7 @@ async def scrape_page(page, url: str) -> List[Row]:
             placering = map_placering_value(placetxt)
 
             dist_raw = normalize_cell_text(await cell("startPositionAndDistance").inner_text())
-            distans, spar, underlag = parse_dist_spar(dist_raw)
+            distans, spar, _ = parse_dist_spar(dist_raw)  # //Changed!
 
             tid_raw = normalize_cell_text(await cell("time").inner_text())
             tid, startmetod, galopp = parse_tid_cell(tid_raw)
@@ -413,7 +454,7 @@ async def scrape_page(page, url: str) -> List[Row]:
                 tid=tid,
                 startmetod=startmetod,
                 galopp=galopp,
-                underlag=underlag,
+                underlag=underlag_for_lopp,  # //Changed!
                 kusk=kusk,
                 pris=pris,
                 odds=odds,
@@ -421,16 +462,16 @@ async def scrape_page(page, url: str) -> List[Row]:
 
     return data
 
-def write_rows_to_db(rows: List[Row]) -> int: 
-    created_n = 0 
-    updated_n = 0 
-    unchanged_n = 0 
+def write_rows_to_db(rows: List[Row]) -> int:  # //Changed!
+    created_n = 0
+    updated_n = 0
+    unchanged_n = 0
 
-    for r in rows: 
-        namn_clean = normalize_name(r.namn) 
+    for r in rows:
+        namn_clean = normalize_name(r.namn)
 
-        try: 
-            obj, created = HorseResult.objects.get_or_create( 
+        try:
+            obj, created = HorseResult.objects.get_or_create(
                 datum=r.datum,
                 bankod=r.bankod,
                 lopp=r.lopp,
@@ -443,21 +484,21 @@ def write_rows_to_db(rows: List[Row]) -> int:
                     tid=r.tid,
                     startmetod=r.startmetod,
                     galopp=r.galopp,
-                    underlag=r.underlag,
-                    kusk=normalize_kusk(r.kusk), 
+                    underlag=(r.underlag or ""),  # //Changed!
+                    kusk=normalize_kusk(r.kusk),
                     pris=r.pris,
                     odds=(r.odds if (r.odds not in (None, 999)) else 999),
                 ),
             )
-        except IntegrityError as e: 
-            logging.exception("DB IntegrityError for (%s,%s,L%s,%s): %s", r.datum, r.bankod, r.lopp, namn_clean, e) 
-            continue 
+        except IntegrityError as e:
+            logging.exception("DB IntegrityError for (%s,%s,L%s,%s): %s", r.datum, r.bankod, r.lopp, namn_clean, e)
+            continue
 
-        if created: 
-            created_n += 1 
-            continue 
+        if created:
+            created_n += 1
+            continue
 
-        changed_fields = [] 
+        changed_fields = []
 
         if obj.nr != r.nr:
             obj.nr = r.nr
@@ -479,26 +520,26 @@ def write_rows_to_db(rows: List[Row]) -> int:
             obj.tid = r.tid
             changed_fields.append("tid")
 
-        incoming_startmetod = (r.startmetod or "").strip() 
-        if incoming_startmetod and obj.startmetod != incoming_startmetod: 
-            obj.startmetod = incoming_startmetod 
+        incoming_startmetod = (r.startmetod or "").strip()
+        if incoming_startmetod and obj.startmetod != incoming_startmetod:
+            obj.startmetod = incoming_startmetod
             changed_fields.append("startmetod")
 
         if obj.galopp != (r.galopp or ""):
             obj.galopp = (r.galopp or "")
             changed_fields.append("galopp")
 
-        incoming_underlag = (r.underlag or "").strip().lower()        
-        existing_underlag = (obj.underlag or "").strip().lower()      
+        # Underlag: synca alltid (v/n/t eller "")  # //Changed!
+        incoming_underlag = (r.underlag or "").strip().lower()  # //Changed!
+        existing_underlag = (obj.underlag or "").strip().lower()  # //Changed!
+        if incoming_underlag != existing_underlag:  # //Changed!
+            obj.underlag = incoming_underlag  # //Changed!
+            changed_fields.append("underlag")  # //Changed!
 
-        if not existing_underlag and incoming_underlag:               
-            obj.underlag = incoming_underlag                          
-            changed_fields.append("underlag")                         
-
-        kusk_clean = normalize_kusk(r.kusk) 
-        if obj.kusk != (kusk_clean or ""): 
-            obj.kusk = (kusk_clean or "") 
-            changed_fields.append("kusk") 
+        kusk_clean = normalize_kusk(r.kusk)
+        if obj.kusk != (kusk_clean or ""):
+            obj.kusk = (kusk_clean or "")
+            changed_fields.append("kusk")
 
         if obj.pris != r.pris:
             obj.pris = r.pris
@@ -517,8 +558,9 @@ def write_rows_to_db(rows: List[Row]) -> int:
         else:
             unchanged_n += 1
 
-    logging.info("  db_created=%d db_updated=%d db_unchanged=%d", created_n, updated_n, unchanged_n) 
-    return created_n + updated_n 
+    logging.info("  db_created=%d db_updated=%d db_unchanged=%d", created_n, updated_n, unchanged_n)
+    return created_n + updated_n
+
 
 async def run_range(start_id: int, end_id: int) -> int: 
     base = "https://sportapp.travsport.se/race/raceday/ts{}/results/all" 
@@ -561,11 +603,11 @@ async def run_range(start_id: int, end_id: int) -> int:
 class Command(BaseCommand):
     help = "Scrape hard-coded ts-ID range into Result"
 
-    #START_ID = 600_569
-    #END_ID = 601_432
+    START_ID = 609_600
+    END_ID = 610_418
 
-    START_ID = 610_400
-    END_ID = 610_420
+    #START_ID = 616_057
+    #END_ID = 616_075
     
     # 1 januari 2025 ID: 609600
     # sista dc 2925 ID  610418
