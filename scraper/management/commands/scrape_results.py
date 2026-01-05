@@ -54,18 +54,18 @@ def sanitize_underlag(raw: str) -> str:
       t = Tung bana
       "" = annars
     """
-    value = normalize_cell_text(raw).lower().strip()  # //Changed!
+    value = normalize_cell_text(raw).lower().strip()  
     if not value:
         return ""
 
     if "vinterbana" in value:
         return "v"
-    if "något tung" in value:  # matcha före "tung"  # //Changed!
+    if "något tung" in value: 
         return "n"
     if "tung" in value:
         return "t"
 
-    return ""  # //Changed!
+    return ""  
 
 async def _extract_banforhallande_value_from_section(section) -> str:
     """
@@ -75,21 +75,19 @@ async def _extract_banforhallande_value_from_section(section) -> str:
     Returnerar själva värdet (t.ex. "Vinterbana") eller "" om det saknas.
     """
     try:
-        # Exakt enligt din DOM: label-span + syskon-span med värdet  # //Changed!
-        val = section.locator("span:has-text('Banförhållande:') + span")  # //Changed!
+        val = section.locator("span:has-text('Banförhållande:') + span")  
         if await val.count() > 0:
-            return normalize_cell_text(await val.first.inner_text())  # //Changed!
-
-        # Fallback om kolon/whitespace skiljer sig lite  # //Changed!
-        label = section.locator("span:has-text('Banförhållande')")  # //Changed!
+            return normalize_cell_text(await val.first.inner_text())  
+ 
+        label = section.locator("span:has-text('Banförhållande')")  
         if await label.count() > 0:
-            sib = label.first.locator("xpath=following-sibling::span[1]")  # //Changed!
+            sib = label.first.locator("xpath=following-sibling::span[1]")  
             if await sib.count() > 0:
-                return normalize_cell_text(await sib.first.inner_text())  # //Changed!
+                return normalize_cell_text(await sib.first.inner_text())  
     except Exception:
         pass
 
-    return ""  # //Changed!
+    return ""  
 
   
 
@@ -98,29 +96,29 @@ dist_slash_re = re.compile(r"^\s*(\d{1,2})\s*/\s*(\d{3,4})\s*([a-zA-Z() \u00a0]*
 dist_colon_re = re.compile(r"^\s*(\d{3,4})\s*:\s*(\d{1,2})\s*$", re.I)  
 dist_only_re = re.compile(r"^\s*(\d{3,4})\s*(?:m)?\s*$", re.I)  
 
-def parse_dist_spar(txt: str):  # //Changed!
-    t = normalize_cell_text(txt)  # //Changed!
-    if not t:  # //Changed!
-        return None, None, ""  # //Changed!
+def parse_dist_spar(txt: str):  
+    t = normalize_cell_text(txt)  
+    if not t:  
+        return None, None, ""  
 
-    m = dist_slash_re.match(t)  # //Changed!
-    if m:  # //Changed!
-        spar = int(m.group(1))  # //Changed!
-        distans = int(m.group(2))  # //Changed!
-        return distans, spar, ""  # //Changed!  # underlag hämtas INTE här längre
+    m = dist_slash_re.match(t)  
+    if m:  
+        spar = int(m.group(1))  
+        distans = int(m.group(2))  
+        return distans, spar, ""   
 
-    m = dist_colon_re.match(t)  # //Changed!
-    if m:  # //Changed!
-        distans = int(m.group(1))  # //Changed!
-        spar = int(m.group(2))  # //Changed!
-        return distans, spar, ""  # //Changed!
+    m = dist_colon_re.match(t)  
+    if m:  
+        distans = int(m.group(1))  
+        spar = int(m.group(2))  
+        return distans, spar, ""  
 
-    m = dist_only_re.match(t)  # //Changed!
-    if m:  # //Changed!
-        distans = int(m.group(1))  # //Changed!
-        return distans, 1, ""  # //Changed!
+    m = dist_only_re.match(t)  
+    if m:  
+        distans = int(m.group(1))  
+        return distans, 1, ""  
 
-    return None, None, ""  # //Changed!
+    return None, None, ""  
 
 placering_with_r = re.compile(r"^(\d{1,2})r$", re.I)  
 
@@ -191,10 +189,9 @@ def parse_tid_cell(raw: str):
 
 PRIS_PREFIX_RE = re.compile(r"\bPris\s*:\s*", re.IGNORECASE)
 
-# Alla vanliga dash-varianter som kan dyka upp i UI-text  # //Changed!
-DASH_CHARS = r"\-\u2010\u2011\u2012\u2013\u2014\u2212\uFE63\uFF0D"  # //Changed!
+DASH_CHARS = r"\-\u2010\u2011\u2012\u2013\u2014\u2212\uFE63\uFF0D"  
 
-LEADING_PRIZES_RE = re.compile(  # //Changed!
+LEADING_PRIZES_RE = re.compile(  
     rf"^\s*([0-9][0-9\.\s\u00a0]*(?:\s*[{DASH_CHARS}]\s*[0-9][0-9\.\s\u00a0]*)*)"
 )
 NUMBER_TOKEN_RE = re.compile(r"\d{1,3}(?:[.\s\u00a0]\d{3})+|\d+")
@@ -234,11 +231,11 @@ def parse_pris_text(full_text: str) -> Tuple[List[int], Optional[int], Optional[
 
     after = text[m0.end():]
 
-    prizes: List[int] = []  # //Changed!
+    prizes: List[int] = []  
     m1 = LEADING_PRIZES_RE.match(after)
     if m1:
-        leading = m1.group(1)  # //Changed!
-        for raw_tok in NUMBER_TOKEN_RE.findall(leading):  # //Changed!
+        leading = m1.group(1)  
+        for raw_tok in NUMBER_TOKEN_RE.findall(leading):  
             v = _parse_swe_int(raw_tok)
             if v is not None:
                 prizes.append(v)
@@ -342,7 +339,7 @@ async def _extract_pris_text_from_section(section) -> str:
 
     return "" 
 
-async def scrape_page(page, url: str) -> List[Row]:  # //Changed!
+async def scrape_page(page, url: str) -> List[Row]:  
     logging.info("  goto %s", url)
     await page.goto(url, timeout=60_000, wait_until="domcontentloaded")
     logging.info("  landed %s", page.url)
@@ -379,9 +376,8 @@ async def scrape_page(page, url: str) -> List[Row]:  # //Changed!
         pris_text = await _extract_pris_text_from_section(section)
         prizes, min_pris, _ = parse_pris_text(pris_text)
 
-        # HÄR ska underlag hämtas: "Banförhållande: <text>"  # //Changed!
-        ban_value = await _extract_banforhallande_value_from_section(section)  # //Changed!
-        underlag_for_lopp = sanitize_underlag(ban_value)  # //Changed!
+        ban_value = await _extract_banforhallande_value_from_section(section)  
+        underlag_for_lopp = sanitize_underlag(ban_value)  
 
         rows = await section.locator("div[role='row'][data-rowindex]").all()
         if not rows:
@@ -424,7 +420,7 @@ async def scrape_page(page, url: str) -> List[Row]:  # //Changed!
             placering = map_placering_value(placetxt)
 
             dist_raw = normalize_cell_text(await cell("startPositionAndDistance").inner_text())
-            distans, spar, _ = parse_dist_spar(dist_raw)  # //Changed!
+            distans, spar, _ = parse_dist_spar(dist_raw)  
 
             tid_raw = normalize_cell_text(await cell("time").inner_text())
             tid, startmetod, galopp = parse_tid_cell(tid_raw)
@@ -454,7 +450,7 @@ async def scrape_page(page, url: str) -> List[Row]:  # //Changed!
                 tid=tid,
                 startmetod=startmetod,
                 galopp=galopp,
-                underlag=underlag_for_lopp,  # //Changed!
+                underlag=underlag_for_lopp,  
                 kusk=kusk,
                 pris=pris,
                 odds=odds,
@@ -462,7 +458,7 @@ async def scrape_page(page, url: str) -> List[Row]:  # //Changed!
 
     return data
 
-def write_rows_to_db(rows: List[Row]) -> int:  # //Changed!
+def write_rows_to_db(rows: List[Row]) -> int:  
     created_n = 0
     updated_n = 0
     unchanged_n = 0
@@ -484,7 +480,7 @@ def write_rows_to_db(rows: List[Row]) -> int:  # //Changed!
                     tid=r.tid,
                     startmetod=r.startmetod,
                     galopp=r.galopp,
-                    underlag=(r.underlag or ""),  # //Changed!
+                    underlag=(r.underlag or ""),  
                     kusk=normalize_kusk(r.kusk),
                     pris=r.pris,
                     odds=(r.odds if (r.odds not in (None, 999)) else 999),
@@ -529,12 +525,11 @@ def write_rows_to_db(rows: List[Row]) -> int:  # //Changed!
             obj.galopp = (r.galopp or "")
             changed_fields.append("galopp")
 
-        # Underlag: synca alltid (v/n/t eller "")  # //Changed!
-        incoming_underlag = (r.underlag or "").strip().lower()  # //Changed!
-        existing_underlag = (obj.underlag or "").strip().lower()  # //Changed!
-        if incoming_underlag != existing_underlag:  # //Changed!
-            obj.underlag = incoming_underlag  # //Changed!
-            changed_fields.append("underlag")  # //Changed!
+        incoming_underlag = (r.underlag or "").strip().lower()  
+        existing_underlag = (obj.underlag or "").strip().lower()  
+        if incoming_underlag != existing_underlag:  
+            obj.underlag = incoming_underlag  
+            changed_fields.append("underlag")  
 
         kusk_clean = normalize_kusk(r.kusk)
         if obj.kusk != (kusk_clean or ""):
@@ -603,8 +598,8 @@ async def run_range(start_id: int, end_id: int) -> int:
 class Command(BaseCommand):
     help = "Scrape hard-coded ts-ID range into Result"
 
-    START_ID = 609_600
-    END_ID = 610_418
+    START_ID = 605_104
+    END_ID = 605_919
 
     #START_ID = 616_057
     #END_ID = 616_075
