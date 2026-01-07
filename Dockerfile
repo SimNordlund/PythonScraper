@@ -1,20 +1,15 @@
-FROM python:3.12-slim
+FROM python:3.12-slim-bookworm  # //Changed!
 
-# ───── Playwright & system libraries ─────────────────────────────────
-RUN apt-get update && apt-get install -y \
-        curl gnupg ca-certificates \
-    && curl -fsSL https://deb.nodesource.com/setup_current.x | bash - \
-    && apt-get install -y nodejs \
-       libnss3 libatk1.0-0 libatk-bridge2.0-0 libdrm2 libxkbcommon0 \
-       libxcomposite1 libxdamage1 libxrandr2 libgbm1 libpangocairo-1.0-0 \
-       libgtk-3-0 libpango-1.0-0 libasound2 \
-    && rm -rf /var/lib/apt/lists/*
+# ───── System packages (keep minimal) ───────────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*  # //Changed!
 
 # ───── Python dependencies ──────────────────────────────────────────
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt \
-    && playwright install --with-deps            
+RUN pip install --no-cache-dir -r requirements.txt \  # //Changed!
+    && playwright install --with-deps                 # //Changed!
 
 # ───── Project code ─────────────────────────────────────────────────
 COPY . .
@@ -24,4 +19,4 @@ ENV PYTHONUNBUFFERED=1
 ENV DJANGO_SETTINGS_MODULE=horseproj.settings
 
 # ───── Launch Django via Gunicorn (Render sets $PORT) ───────────────
-CMD sh -c "gunicorn horseproj.wsgi:application --bind 0.0.0.0:$PORT"
+CMD ["sh", "-c", "gunicorn horseproj.wsgi:application --bind 0.0.0.0:$PORT"]  # //Changed!
