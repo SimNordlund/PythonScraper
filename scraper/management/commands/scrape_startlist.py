@@ -239,8 +239,8 @@ def upsert_resultat_from_startrow(r: StartRow):
 class Command(BaseCommand):
     help = "Scrape hard-coded ts-ID range into Startlista (and also seed Resultat for today/future only)"
     
-    START_ID = 616_057
-    END_ID   = 616_100
+    START_ID = 616_066
+    END_ID   = 616_106
 
     def handle(self, *args, **kwargs):
         base = "https://sportapp.travsport.se/race/raceday/ts{}/startlist/all"

@@ -599,8 +599,8 @@ class Command(BaseCommand):
     help = "Scrape hard-coded ts-ID range into Result"
 
 
-    START_ID = 616_057
-    END_ID = 616_075
+    START_ID = 616_060
+    END_ID = 616_100
     
     # 1 januari 2025 ID: 609600
     # sista dc 2925 ID  610418
