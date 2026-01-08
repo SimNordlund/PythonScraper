@@ -345,7 +345,7 @@ async def scrape_page(page, url: str) -> List[Row]:
     logging.info("  landed %s", page.url)
 
     logging.info("  waiting for grid...")
-    await page.wait_for_selector("div[role='row'][data-rowindex]", timeout=15_000)
+    await page.wait_for_selector("div[role='row'][data-rowindex]", timeout=60_000)
     logging.info("  grid found")
 
     nav = page.locator("div[class*='RaceDayNavigator_title'] span")
