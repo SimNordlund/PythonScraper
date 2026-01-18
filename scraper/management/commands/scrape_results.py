@@ -339,7 +339,7 @@ async def _extract_pris_text_from_section(section) -> str:
 
     return "" 
 
-async def scrape_page(page, url: str) -> List[Row]:  
+async def scrape_page(page, url: str) -> List[Row]:
     logging.info("  goto %s", url)
     await page.goto(url, timeout=60_000, wait_until="domcontentloaded")
     logging.info("  landed %s", page.url)
@@ -376,8 +376,10 @@ async def scrape_page(page, url: str) -> List[Row]:
         pris_text = await _extract_pris_text_from_section(section)
         prizes, min_pris, _ = parse_pris_text(pris_text)
 
-        ban_value = await _extract_banforhallande_value_from_section(section)  
-        underlag_for_lopp = sanitize_underlag(ban_value)  
+        lopp_pris = pris_for_lopp(prizes, min_pris)  # //Changed!
+
+        ban_value = await _extract_banforhallande_value_from_section(section)
+        underlag_for_lopp = sanitize_underlag(ban_value)
 
         rows = await section.locator("div[role='row'][data-rowindex]").all()
         if not rows:
@@ -420,12 +422,12 @@ async def scrape_page(page, url: str) -> List[Row]:
             placering = map_placering_value(placetxt)
 
             dist_raw = normalize_cell_text(await cell("startPositionAndDistance").inner_text())
-            distans, spar, _ = parse_dist_spar(dist_raw)  
+            distans, spar, _ = parse_dist_spar(dist_raw)
 
             tid_raw = normalize_cell_text(await cell("time").inner_text())
             tid, startmetod, galopp = parse_tid_cell(tid_raw)
 
-            pris = pris_for_placering(placering, prizes, min_pris)
+            pris = lopp_pris  # //Changed!
 
             odds = None
             try:
@@ -450,7 +452,7 @@ async def scrape_page(page, url: str) -> List[Row]:
                 tid=tid,
                 startmetod=startmetod,
                 galopp=galopp,
-                underlag=underlag_for_lopp,  
+                underlag=underlag_for_lopp,
                 kusk=kusk,
                 pris=pris,
                 odds=odds,
@@ -458,7 +460,8 @@ async def scrape_page(page, url: str) -> List[Row]:
 
     return data
 
-def write_rows_to_db(rows: List[Row]) -> int:  
+
+def write_rows_to_db(rows: List[Row]) -> int:
     created_n = 0
     updated_n = 0
     unchanged_n = 0
@@ -480,7 +483,7 @@ def write_rows_to_db(rows: List[Row]) -> int:
                     tid=r.tid,
                     startmetod=r.startmetod,
                     galopp=r.galopp,
-                    underlag=(r.underlag or ""),  
+                    underlag=(r.underlag or ""),
                     kusk=normalize_kusk(r.kusk),
                     pris=r.pris,
                     odds=(r.odds if (r.odds not in (None, 999)) else 999),
@@ -525,11 +528,11 @@ def write_rows_to_db(rows: List[Row]) -> int:
             obj.galopp = (r.galopp or "")
             changed_fields.append("galopp")
 
-        incoming_underlag = (r.underlag or "").strip().lower()  
-        existing_underlag = (obj.underlag or "").strip().lower()  
-        if incoming_underlag != existing_underlag:  
-            obj.underlag = incoming_underlag  
-            changed_fields.append("underlag")  
+        incoming_underlag = (r.underlag or "").strip().lower()
+        existing_underlag = (obj.underlag or "").strip().lower()
+        if incoming_underlag != existing_underlag:
+            obj.underlag = incoming_underlag
+            changed_fields.append("underlag")
 
         kusk_clean = normalize_kusk(r.kusk)
         if obj.kusk != (kusk_clean or ""):
@@ -556,6 +559,12 @@ def write_rows_to_db(rows: List[Row]) -> int:
     logging.info("  db_created=%d db_updated=%d db_unchanged=%d", created_n, updated_n, unchanged_n)
     return created_n + updated_n
 
+
+def pris_for_lopp(prizes: List[int], min_pris: Optional[int]) -> int:  # //Changed!
+    # Vi vill alltid ge ALLA hästar i loppet första prissumman (plats 1).  # //Changed!
+    if prizes:  # //Changed!
+        return int(prizes[0])  # //Changed!
+    return int(min_pris) if min_pris is not None else 0  # //Changed!
 
 async def run_range(start_id: int, end_id: int) -> int: 
     base = "https://sportapp.travsport.se/race/raceday/ts{}/results/all" 
@@ -598,9 +607,11 @@ async def run_range(start_id: int, end_id: int) -> int:
 class Command(BaseCommand):
     help = "Scrape hard-coded ts-ID range into Result"
 
-
-    START_ID = 616_060
+    START_ID = 616_080
     END_ID = 616_100
+    
+    #START_ID = 600_569
+    #END_ID = 601_432
     
     # 1 januari 2025 ID: 609600
     # sista dc 2925 ID  610418
