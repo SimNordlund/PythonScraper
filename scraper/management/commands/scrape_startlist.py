@@ -240,6 +240,8 @@ class Command(BaseCommand):
     help = "Scrape hard-coded ts-ID range into Startlista (and also seed Resultat for today/future only)"
     
     #2026
+    
+    
     START_ID = 616_120
     END_ID   = 616_145
     

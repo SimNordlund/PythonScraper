@@ -376,7 +376,7 @@ async def scrape_page(page, url: str) -> List[Row]:
         pris_text = await _extract_pris_text_from_section(section)
         prizes, min_pris, _ = parse_pris_text(pris_text)
 
-        lopp_pris = pris_for_lopp(prizes, min_pris)  # //Changed!
+        lopp_pris = pris_for_lopp(prizes, min_pris)  
 
         ban_value = await _extract_banforhallande_value_from_section(section)
         underlag_for_lopp = sanitize_underlag(ban_value)
@@ -427,7 +427,7 @@ async def scrape_page(page, url: str) -> List[Row]:
             tid_raw = normalize_cell_text(await cell("time").inner_text())
             tid, startmetod, galopp = parse_tid_cell(tid_raw)
 
-            pris = lopp_pris  # //Changed!
+            pris = lopp_pris  
 
             odds = None
             try:
@@ -560,11 +560,11 @@ def write_rows_to_db(rows: List[Row]) -> int:
     return created_n + updated_n
 
 
-def pris_for_lopp(prizes: List[int], min_pris: Optional[int]) -> int:  # //Changed!
-    # Vi vill alltid ge ALLA hästar i loppet första prissumman (plats 1).  # //Changed!
-    if prizes:  # //Changed!
-        return int(prizes[0])  # //Changed!
-    return int(min_pris) if min_pris is not None else 0  # //Changed!
+def pris_for_lopp(prizes: List[int], min_pris: Optional[int]) -> int:  
+    # Vi vill alltid ge ALLA hästar i loppet första prissumman (plats 1).  
+    if prizes:  
+        return int(prizes[0])  
+    return int(min_pris) if min_pris is not None else 0  
 
 async def run_range(start_id: int, end_id: int) -> int: 
     base = "https://sportapp.travsport.se/race/raceday/ts{}/results/all" 
@@ -607,6 +607,8 @@ async def run_range(start_id: int, end_id: int) -> int:
 class Command(BaseCommand):
     help = "Scrape hard-coded ts-ID range into Result"
 
+    
+    
     START_ID = 616_120
     END_ID = 616_145
     
