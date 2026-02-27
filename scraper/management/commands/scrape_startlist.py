@@ -1,3 +1,5 @@
+# scraper/management/commands/scrape_startlist.py
+
 import asyncio, re, unicodedata, logging
 from dataclasses import dataclass
 from typing import List, Optional
@@ -85,6 +87,70 @@ def track_to_bankod(n: str) -> str:
     return FULLNAME_TO_BANKOD.get(n, FULLNAME_TO_BANKOD.get(_strip(n), n[:2].title()))
 
 
+# ---- Nav helpers (bana+datum) ----
+MONTHS_PATTERN = "|".join(SWEDISH_MONTH.keys())  # //Changed!
+DATE_PART_RX = re.compile(rf"\b(\d{{1,2}})\s+({MONTHS_PATTERN})\s+(\d{{4}})\b", re.I)  # //Changed!
+WEEKDAYS = ("MÅNDAG","TISDAG","ONSDAG","TORSDAG","FREDAG","LÖRDAG","SÖNDAG")  # //Changed!
+WEEKDAYS_RX = re.compile(rf"\b(?:{'|'.join(WEEKDAYS)})\b", re.I)  # //Changed!
+
+async def _get_nav_texts(page):  # //Changed!
+    for sel in ("[class*='RaceDayNavigator'] span", "header span"):  # //Changed!
+        loc = page.locator(sel)  # //Changed!
+        n = await loc.count()  # //Changed!
+        texts = []  # //Changed!
+        for i in range(n):  # //Changed!
+            t = normalize_cell_text(await loc.nth(i).inner_text())  # //Changed!
+            if t:  # //Changed!
+                texts.append(t)  # //Changed!
+        if texts:  # //Changed!
+            return texts  # //Changed!
+    return []  # //Changed!
+
+def _extract_track_and_date(texts):  # //Changed!
+    cleaned = [t for t in (texts or []) if t and t.strip()]
+    cleaned = [t.strip() for t in cleaned]
+
+    date_container = None
+    date_part = None
+
+    for t in cleaned:
+        m = DATE_PART_RX.search(t.upper())
+        if m:
+            date_container = t
+            date_part = m.group(0).upper()  # ex: "27 FEBRUARI 2026"  # //Changed!
+            break
+
+    if not date_part:
+        return None, None
+
+    # track i egen span (t.ex. "UMÅKER") om det finns
+    track_txt = None
+    for t in cleaned:
+        if t == date_container:
+            continue
+        if re.search(r"\d", t):
+            continue
+        up = t.upper()
+        if up in ("STARTLISTA", "DAGSRESULTAT", "TÄVLINGSDAGSRESULTAT"):
+            continue
+        track_txt = up
+        break
+
+    # annars: track + datum ligger i samma rad (t.ex. "DAG ESKILSTUNA FREDAG 27 FEBRUARI 2026")
+    if not track_txt and date_container:
+        up = date_container.upper()
+        up = up.replace(date_part, " ")
+        up = WEEKDAYS_RX.sub(" ", up)
+
+        up = up.strip()
+        for prefix in ("TÄVLINGSDAG", "TRAVTÄVLING", "DAG"):
+            if up.startswith(prefix):
+                up = up[len(prefix):].strip()
+        track_txt = re.sub(r"\s+", " ", up).strip()
+
+    return track_txt, date_part
+
+
 @dataclass
 class StartRow:
     startdatum: int
@@ -106,41 +172,42 @@ async def scrape_startlist(url: str) -> List[StartRow]:
         page = await ctx.new_page()
 
         try:
-            await page.goto(url, timeout=0)
+            await page.goto(url, timeout=0, wait_until="domcontentloaded")  # //Changed!
         except PlaywrightError:
             await browser.close()
             return []
 
         try:
-            await page.wait_for_selector("div[role='row'][data-rowindex]", timeout=10_000)
+            await page.wait_for_selector("div[role='row'][data-rowindex]", timeout=60_000)  # //Changed!
+            await page.wait_for_selector("xpath=//h2[starts-with(normalize-space(),'Lopp')]", timeout=60_000)  # //Changed!
         except PlaywrightError:
             await browser.close()
             return []
 
-        nav = page.locator("div[class*='RaceDayNavigator_title'] span")
-        if await nav.count() < 2:
+        texts = await _get_nav_texts(page)  # //Changed!
+        raw_track, date_txt = _extract_track_and_date(texts)  # //Changed!
+        if not raw_track or not date_txt:  # //Changed!
+            logging.info("Nav parse failed. texts=%s", texts)  # //Changed!
             await browser.close()
-            return []
+            return []  # //Changed!
 
-        raw_track = normalize_cell_text(await nav.nth(0).inner_text()).upper()
-        if raw_track.startswith(("TÄVLINGSDAG", "TRAVTÄVLING")):
-            parts = raw_track.split(maxsplit=1)
-            raw_track = parts[1] if len(parts) > 1 else raw_track
-
-        bankod = track_to_bankod(raw_track)
-        startdatum = int(swedish_date_to_yyyymmdd(normalize_cell_text(await nav.nth(1).inner_text())))
+        bankod = track_to_bankod(raw_track)  # //Changed!
+        startdatum = int(swedish_date_to_yyyymmdd(date_txt))  # //Changed!
 
         out: List[StartRow] = []
         lopp_headers = page.locator("//h2[starts-with(normalize-space(),'Lopp')]")
         for i in range(await lopp_headers.count()):
             header = lopp_headers.nth(i)
+            await header.scroll_into_view_if_needed()  # //Changed!
+
             m = re.search(r"Lopp\s+(\d+)", normalize_cell_text(await header.inner_text()))
             if not m:
                 continue
             lopp_nr = int(m.group(1))
 
-            section = header.locator("xpath=ancestor::div[contains(@class,'MuiBox-root')][1]")
-            rows = await section.locator("div[role='row'][data-rowindex]").all()
+            # Griden ligger numera efter rubriken (inte i samma ancestor-box)  # //Changed!
+            grid = header.locator("xpath=following::div[contains(@class,'MuiDataGrid-root')][1]")  # //Changed!
+            rows = await grid.locator("div[role='row'][data-rowindex]").all()  # //Changed!
             if not rows:
                 logging.info("Lopp %s: inga rader, hoppar över", lopp_nr)
                 continue
@@ -148,16 +215,39 @@ async def scrape_startlist(url: str) -> List[StartRow]:
             for row in rows:
                 cell = lambda f: row.locator(f"div[data-field='{f}']")
 
-                horse_cell = cell("horse") 
-                is_struken = (await horse_cell.locator("span[class*='Text_linethrough']").count()) > 0  
+                # Startlista använder mobilehorse (du verifierade i console)  # //Changed!
+                horse_cell = cell("mobilehorse")  # //Changed!
+                if await horse_cell.count() == 0:  # //Changed!
+                    horse_cell = cell("horse")  # //Changed!
 
-                nr_txt = normalize_cell_text(await horse_cell.locator("div").first.inner_text())
-                nr_m = re.search(r"\d+", nr_txt)
-                if not nr_m:
-                    continue
-                nr = int(nr_m.group(0))
+                # Struken: mer tolerant matchning  # //Changed!
+                is_struken = (await horse_cell.locator("[class*='linethrough']").count()) > 0  # //Changed!
 
-                namn_raw = normalize_cell_text(await horse_cell.locator("span").first.inner_text())
+                # Robust nr: försök först som tidigare (div:first), annars regex på celltext  # //Changed!
+                nr = None  # //Changed!
+                try:  # //Changed!
+                    nr_txt = normalize_cell_text(await horse_cell.locator("div").first.inner_text())  # //Changed!
+                    nr_m = re.search(r"\d+", nr_txt)  # //Changed!
+                    if nr_m:  # //Changed!
+                        nr = int(nr_m.group(0))  # //Changed!
+                except Exception:  # //Changed!
+                    nr = None  # //Changed!
+
+                if nr is None:  # //Changed!
+                    horse_text = normalize_cell_text(await horse_cell.inner_text())  # //Changed!
+                    nr_m = re.search(r"\b(\d{1,2})\b", horse_text)  # //Changed!
+                    if not nr_m:  # //Changed!
+                        continue  # //Changed!
+                    nr = int(nr_m.group(1))  # //Changed!
+
+                # Namn: försök span, annars text utan nr  # //Changed!
+                namn_raw = ""  # //Changed!
+                if await horse_cell.locator("span").count() > 0:  # //Changed!
+                    namn_raw = normalize_cell_text(await horse_cell.locator("span").first.inner_text())  # //Changed!
+                if not namn_raw:  # //Changed!
+                    horse_text = normalize_cell_text(await horse_cell.inner_text())  # //Changed!
+                    namn_raw = re.sub(r"^\s*\d+\s*", "", horse_text).strip()  # //Changed!
+
                 namn = normalize_startlista_name(namn_raw)
 
                 kusk_raw = normalize_cell_text(await cell("driver").inner_text())
@@ -190,7 +280,7 @@ def upsert_resultat_from_startrow(r: StartRow):
     namn_clean = r.namn
     kusk_res = normalize_kusk(r.kusk, 80)
 
-    desired_placering = 99 if r.struken else 0 
+    desired_placering = 99 if r.struken else 0
 
     obj, created = HorseResult.objects.get_or_create(
         datum=r.startdatum,
@@ -202,7 +292,7 @@ def upsert_resultat_from_startrow(r: StartRow):
             distans=r.distans,
             spar=r.spar,
             kusk=kusk_res,
-            placering=desired_placering, 
+            placering=desired_placering,
         ),
     )
 
@@ -238,18 +328,10 @@ def upsert_resultat_from_startrow(r: StartRow):
 
 class Command(BaseCommand):
     help = "Scrape hard-coded ts-ID range into Startlista (and also seed Resultat for today/future only)"
-    
-    #2026
-    
-    
+
+    # 2026
     START_ID = 616_120
-    END_ID   = 616_145
-    
-    #START_ID = 605_104
-    #END_ID   = 605_919
-    
-    #2024
-    # ts605104 - ts605919
+    END_ID   = 616_180
 
     def handle(self, *args, **kwargs):
         base = "https://sportapp.travsport.se/race/raceday/ts{}/startlist/all"

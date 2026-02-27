@@ -1,8 +1,10 @@
+# scraper/management/commands/scrape_results.py
+
 import asyncio, re, unicodedata, logging
 from dataclasses import dataclass
-from typing import List, Tuple, Optional 
+from typing import List, Tuple, Optional
 from django.core.management.base import BaseCommand
-from django.db import IntegrityError 
+from django.db import IntegrityError
 from playwright.async_api import async_playwright, Error as PlaywrightError
 from scraper.models import HorseResult
 
@@ -16,208 +18,187 @@ SWEDISH_MONTH = {
 }
 
 def swedish_date_to_yyyymmdd(text: str) -> str:
-    parts = (text or "").strip().upper().split()   
+    parts = (text or "").strip().upper().split()
     if len(parts) == 4:
         _, d, m, y = parts
     else:
         d, m, y = parts
     return f"{int(y):04d}{SWEDISH_MONTH[m]:02d}{int(d):02d}"
 
-_APOSTROPHES_RE = re.compile(r"[\'\u2019]")    
+_APOSTROPHES_RE = re.compile(r"[\'\u2019]")
 
-def normalize_cell_text(s: str) -> str:  
-    if s is None:  
-        return ""  
-    return s.replace("\u00a0", " ").strip()   
+def normalize_cell_text(s: str) -> str:
+    if s is None:
+        return ""
+    return s.replace("\u00a0", " ").strip()
 
-def trim_to_max(s: str, max_len: int) -> str:   
-    s = s or ""  
-    return s if len(s) <= max_len else s[:max_len]   
+def trim_to_max(s: str, max_len: int) -> str:
+    s = s or ""
+    return s if len(s) <= max_len else s[:max_len]
 
-def normalize_name(name: str) -> str:  
-    cleaned = normalize_cell_text(name).replace("*", "")   
-    cleaned = _APOSTROPHES_RE.sub("", cleaned) 
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()   
-    return trim_to_max(cleaned, 50)   
+def normalize_name(name: str) -> str:
+    cleaned = normalize_cell_text(name).replace("*", "")
+    cleaned = _APOSTROPHES_RE.sub("", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return trim_to_max(cleaned, 50)
 
-def normalize_kusk(kusk: str) -> str:   
-    cleaned = re.sub(r"\s+", " ", normalize_cell_text(kusk)).strip()  
-    cleaned = _APOSTROPHES_RE.sub("", cleaned) 
-    return trim_to_max(cleaned, 80)   
+def normalize_kusk(kusk: str) -> str:
+    cleaned = re.sub(r"\s+", " ", normalize_cell_text(kusk)).strip()
+    cleaned = _APOSTROPHES_RE.sub("", cleaned)
+    return trim_to_max(cleaned, 80)
 
 def sanitize_underlag(raw: str) -> str:
-    """
-    Tar emot t.ex. "Vinterbana", "Något tung bana", "Tung bana", "Lätt bana" osv.
-    Returnerar:
-      v = Vinterbana
-      n = Något tung bana
-      t = Tung bana
-      "" = annars
-    """
-    value = normalize_cell_text(raw).lower().strip()  
+    value = normalize_cell_text(raw).lower().strip()
     if not value:
         return ""
-
     if "vinterbana" in value:
         return "v"
-    if "något tung" in value: 
+    if "något tung" in value:
         return "n"
     if "tung" in value:
         return "t"
-
-    return ""  
+    return ""
 
 async def _extract_banforhallande_value_from_section(section) -> str:
-    """
-    DOMen i dina screenshots:
-      <span> Banförhållande: </span><span>Vinterbana</span>
-
-    Returnerar själva värdet (t.ex. "Vinterbana") eller "" om det saknas.
-    """
     try:
-        val = section.locator("span:has-text('Banförhållande:') + span")  
+        val = section.locator("span:has-text('Banförhållande:') + span")
         if await val.count() > 0:
-            return normalize_cell_text(await val.first.inner_text())  
- 
-        label = section.locator("span:has-text('Banförhållande')")  
+            return normalize_cell_text(await val.first.inner_text())
+
+        label = section.locator("span:has-text('Banförhållande')")
         if await label.count() > 0:
-            sib = label.first.locator("xpath=following-sibling::span[1]")  
+            sib = label.first.locator("xpath=following-sibling::span[1]")
             if await sib.count() > 0:
-                return normalize_cell_text(await sib.first.inner_text())  
+                return normalize_cell_text(await sib.first.inner_text())
     except Exception:
         pass
-
-    return ""  
-
-  
+    return ""
 
 
-dist_slash_re = re.compile(r"^\s*(\d{1,2})\s*/\s*(\d{3,4})\s*([a-zA-Z() \u00a0]*)\s*$", re.I)  
-dist_colon_re = re.compile(r"^\s*(\d{3,4})\s*:\s*(\d{1,2})\s*$", re.I)  
-dist_only_re = re.compile(r"^\s*(\d{3,4})\s*(?:m)?\s*$", re.I)  
+dist_slash_re = re.compile(r"^\s*(\d{1,2})\s*/\s*(\d{3,4})\s*([a-zA-Z() \u00a0]*)\s*$", re.I)
+dist_colon_re = re.compile(r"^\s*(\d{3,4})\s*:\s*(\d{1,2})\s*$", re.I)
+dist_only_re = re.compile(r"^\s*(\d{3,4})\s*(?:m)?\s*$", re.I)
 
-def parse_dist_spar(txt: str):  
-    t = normalize_cell_text(txt)  
-    if not t:  
-        return None, None, ""  
+def parse_dist_spar(txt: str):
+    t = normalize_cell_text(txt)
+    if not t:
+        return None, None, ""
 
-    m = dist_slash_re.match(t)  
-    if m:  
-        spar = int(m.group(1))  
-        distans = int(m.group(2))  
-        return distans, spar, ""   
+    m = dist_slash_re.match(t)
+    if m:
+        spar = int(m.group(1))
+        distans = int(m.group(2))
+        return distans, spar, ""
 
-    m = dist_colon_re.match(t)  
-    if m:  
-        distans = int(m.group(1))  
-        spar = int(m.group(2))  
-        return distans, spar, ""  
+    m = dist_colon_re.match(t)
+    if m:
+        distans = int(m.group(1))
+        spar = int(m.group(2))
+        return distans, spar, ""
 
-    m = dist_only_re.match(t)  
-    if m:  
-        distans = int(m.group(1))  
-        return distans, 1, ""  
+    m = dist_only_re.match(t)
+    if m:
+        distans = int(m.group(1))
+        return distans, 1, ""
 
-    return None, None, ""  
+    return None, None, ""
 
-placering_with_r = re.compile(r"^(\d{1,2})r$", re.I)  
+placering_with_r = re.compile(r"^(\d{1,2})r$", re.I)
 
-def map_placering_value(raw: str):  
-    t = normalize_cell_text(raw).lower()  
-    if not t:  
-        return None  
+def map_placering_value(raw: str):
+    t = normalize_cell_text(raw).lower()
+    if not t:
+        return None
 
-    token = re.split(r"\s+", t, 1)[0]  
-    token = re.sub(r"[^0-9a-zåäö]", "", token)  
-    if not token:  
-        return None  
+    token = re.split(r"\s+", t, 1)[0]
+    token = re.sub(r"[^0-9a-zåäö]", "", token)
+    if not token:
+        return None
 
-    mr = placering_with_r.match(token)  
-    if mr:  
-        token = mr.group(1)  
+    mr = placering_with_r.match(token)
+    if mr:
+        token = mr.group(1)
 
-    if token in ("k", "p", "str", "d"): 
-        return 99 
+    if token in ("k", "p", "str", "d"):
+        return 99
 
-    if not token.isdigit() or len(token) > 2: 
-        return None 
+    if not token.isdigit() or len(token) > 2:
+        return None
 
-    try: 
-        v = int(token) 
-    except ValueError: 
-        return None 
+    try:
+        v = int(token)
+    except ValueError:
+        return None
 
-    if v == 0 or v == 9: 
-        return 15 
+    if v == 0 or v == 9:
+        return 15
 
-    return v 
+    return v
 
 
-TIME_VALUE = re.compile(r"(?:\d+\.)?(\d{1,2})[.,](\d{1,2})") 
+TIME_VALUE = re.compile(r"(?:\d+\.)?(\d{1,2})[.,](\d{1,2})")
 
-def parse_tid_cell(raw: str): 
-    t = normalize_cell_text(raw).lower() 
-    if not t: 
-        return None, "", "" 
+def parse_tid_cell(raw: str):
+    t = normalize_cell_text(raw).lower()
+    if not t:
+        return None, "", ""
 
-    t2 = re.sub(r"[()\s]", "", t) 
+    t2 = re.sub(r"[()\s]", "", t)
 
-    letters = re.sub(r"[0-9\.,]", "", t2) 
-    startmetod = "a" if "a" in letters else "" 
-    galopp = "g" if "g" in letters else "" 
+    letters = re.sub(r"[0-9\.,]", "", t2)
+    startmetod = "a" if "a" in letters else ""
+    galopp = "g" if "g" in letters else ""
 
-    force99 = ("dist" in letters) or ("kub" in letters) or ("vmk" in letters) or ("u" in letters) or ("d" in letters) or ("it" in letters) 
+    force99 = ("dist" in letters) or ("kub" in letters) or ("vmk" in letters) or ("u" in letters) or ("d" in letters) or ("it" in letters)
 
-    tid = None 
-    m = TIME_VALUE.search(t2) 
-    if m: 
-        try: 
-            tid = float(f"{m.group(1)}.{m.group(2)}") 
-        except ValueError: 
-            tid = None 
+    tid = None
+    m = TIME_VALUE.search(t2)
+    if m:
+        try:
+            tid = float(f"{m.group(1)}.{m.group(2)}")
+        except ValueError:
+            tid = None
 
-    if force99: 
-        return 99.0, startmetod, galopp 
+    if force99:
+        return 99.0, startmetod, galopp
 
-    if tid is None: 
-        has_sep = ("," in t2) or ("." in t2) 
-        digits = re.sub(r"\D+", "", t2) 
-        if (not has_sep) and digits and len(digits) <= 2 and letters: 
-            return 99.0, startmetod, galopp 
+    if tid is None:
+        has_sep = ("," in t2) or ("." in t2)
+        digits = re.sub(r"\D+", "", t2)
+        if (not has_sep) and digits and len(digits) <= 2 and letters:
+            return 99.0, startmetod, galopp
 
-    return tid, startmetod, galopp 
+    return tid, startmetod, galopp
+
 
 PRIS_PREFIX_RE = re.compile(r"\bPris\s*:\s*", re.IGNORECASE)
+DASH_CHARS = r"\-\u2010\u2011\u2012\u2013\u2014\u2212\uFE63\uFF0D"
 
-DASH_CHARS = r"\-\u2010\u2011\u2012\u2013\u2014\u2212\uFE63\uFF0D"  
-
-LEADING_PRIZES_RE = re.compile(  
+LEADING_PRIZES_RE = re.compile(
     rf"^\s*([0-9][0-9\.\s\u00a0]*(?:\s*[{DASH_CHARS}]\s*[0-9][0-9\.\s\u00a0]*)*)"
 )
 NUMBER_TOKEN_RE = re.compile(r"\d{1,3}(?:[.\s\u00a0]\d{3})+|\d+")
-
 SAMT_TILL_OVRIGA_RE = re.compile(
     r"\bsamt\s+([0-9][0-9\.\s\u00a0]*)\s*kr\s+till\s+övriga\b",
     re.IGNORECASE
 )
-
 PRISPLACERADE_RE = re.compile(r"\((\d+)\s*prisplacerade\)", re.IGNORECASE)
 LAGST_RE = re.compile(r"Lägst\s+([0-9][0-9\.\s\u00a0]*)\s*kr", re.IGNORECASE)
 
-def _parse_swe_int(token: str) -> Optional[int]: 
-    if token is None: 
-        return None 
-    t = normalize_cell_text(token) 
-    t = t.replace("(", "").replace(")", "") 
-    t = t.replace("\u00a0", " ") 
-    t = t.replace(".", "").replace(" ", "") 
-    t = re.sub(r"[^\d]", "", t) 
-    if not t: 
-        return None 
-    try: 
-        return int(t) 
-    except ValueError: 
-        return None 
+def _parse_swe_int(token: str) -> Optional[int]:
+    if token is None:
+        return None
+    t = normalize_cell_text(token)
+    t = t.replace("(", "").replace(")", "")
+    t = t.replace("\u00a0", " ")
+    t = t.replace(".", "").replace(" ", "")
+    t = re.sub(r"[^\d]", "", t)
+    if not t:
+        return None
+    try:
+        return int(t)
+    except ValueError:
+        return None
 
 def parse_pris_text(full_text: str) -> Tuple[List[int], Optional[int], Optional[int]]:
     text = normalize_cell_text(full_text)
@@ -231,11 +212,11 @@ def parse_pris_text(full_text: str) -> Tuple[List[int], Optional[int], Optional[
 
     after = text[m0.end():]
 
-    prizes: List[int] = []  
+    prizes: List[int] = []
     m1 = LEADING_PRIZES_RE.match(after)
     if m1:
-        leading = m1.group(1)  
-        for raw_tok in NUMBER_TOKEN_RE.findall(leading):  
+        leading = m1.group(1)
+        for raw_tok in NUMBER_TOKEN_RE.findall(leading):
             v = _parse_swe_int(raw_tok)
             if v is not None:
                 prizes.append(v)
@@ -261,19 +242,10 @@ def parse_pris_text(full_text: str) -> Tuple[List[int], Optional[int], Optional[
 
     return prizes, min_pris, pn
 
-
-def pris_for_placering(placering: Optional[int], prizes: List[int], min_pris: Optional[int]) -> int:
-    if placering is None or placering == 99 or placering <= 0:
-        return 0
-
+def pris_for_lopp(prizes: List[int], min_pris: Optional[int]) -> int:
     if prizes:
-        if placering <= len(prizes):
-            return prizes[placering - 1]
-        if min_pris is not None:
-            return int(min_pris)
-        return 0
-
-    return int(min_pris) if min_pris is not None else 0  
+        return int(prizes[0])
+    return int(min_pris) if min_pris is not None else 0
 
 
 FULLNAME_TO_BANKOD = {
@@ -302,6 +274,68 @@ def track_to_bankod(name: str) -> str:
     return _ASCII_FALLBACK.get(name_ascii, name_up[:2].title())
 
 
+# ---- Nav helpers (bana+datum) ----
+MONTHS_PATTERN = "|".join(SWEDISH_MONTH.keys())  # //Changed!
+DATE_PART_RX = re.compile(rf"\b(\d{{1,2}})\s+({MONTHS_PATTERN})\s+(\d{{4}})\b", re.I)  # //Changed!
+WEEKDAYS = ("MÅNDAG","TISDAG","ONSDAG","TORSDAG","FREDAG","LÖRDAG","SÖNDAG")  # //Changed!
+WEEKDAYS_RX = re.compile(rf"\b(?:{'|'.join(WEEKDAYS)})\b", re.I)  # //Changed!
+
+async def _get_nav_texts(page):  # //Changed!
+    for sel in ("[class*='RaceDayNavigator'] span", "header span"):  # //Changed!
+        loc = page.locator(sel)  # //Changed!
+        n = await loc.count()  # //Changed!
+        texts = []  # //Changed!
+        for i in range(n):  # //Changed!
+            t = normalize_cell_text(await loc.nth(i).inner_text())  # //Changed!
+            if t:  # //Changed!
+                texts.append(t)  # //Changed!
+        if texts:  # //Changed!
+            return texts  # //Changed!
+    return []  # //Changed!
+
+def _extract_track_and_date(texts):  # //Changed!
+    cleaned = [t for t in (texts or []) if t and t.strip()]
+    cleaned = [t.strip() for t in cleaned]
+
+    date_container = None
+    date_part = None
+
+    for t in cleaned:
+        m = DATE_PART_RX.search(t.upper())
+        if m:
+            date_container = t
+            date_part = m.group(0).upper()
+            break
+
+    if not date_part:
+        return None, None
+
+    track_txt = None
+    for t in cleaned:
+        if t == date_container:
+            continue
+        if re.search(r"\d", t):
+            continue
+        up = t.upper()
+        if up in ("STARTLISTA", "DAGSRESULTAT", "TÄVLINGSDAGSRESULTAT"):
+            continue
+        track_txt = up
+        break
+
+    if not track_txt and date_container:
+        up = date_container.upper()
+        up = up.replace(date_part, " ")
+        up = WEEKDAYS_RX.sub(" ", up)
+
+        up = up.strip()
+        for prefix in ("TÄVLINGSDAG", "TRAVTÄVLING", "DAG"):
+            if up.startswith(prefix):
+                up = up[len(prefix):].strip()
+        track_txt = re.sub(r"\s+", " ", up).strip()
+
+    return track_txt, date_part
+
+
 @dataclass
 class Row:
     datum: int
@@ -321,42 +355,42 @@ class Row:
     odds: Optional[int] = None
 
 
+async def _extract_pris_text_from_section(section) -> str:
+    try:
+        loc = section.get_by_text(re.compile(r"\bPris\s*:", re.I))
+        if await loc.count() > 0:
+            return normalize_cell_text(await loc.first.inner_text())
+    except Exception:
+        pass
 
-async def _extract_pris_text_from_section(section) -> str: 
-    try: 
-        loc = section.get_by_text(re.compile(r"\bPris\s*:", re.I)) 
-        if await loc.count() > 0: 
-            return normalize_cell_text(await loc.first.inner_text()) 
-    except Exception: 
-        pass 
+    try:
+        loc = section.locator("xpath=.//*[contains(., 'Pris:') or contains(., 'PRIS:')]")
+        if await loc.count() > 0:
+            return normalize_cell_text(await loc.first.inner_text())
+    except Exception:
+        pass
 
-    try: 
-        loc = section.locator("xpath=.//*[contains(., 'Pris:') or contains(., 'PRIS:')]") 
-        if await loc.count() > 0: 
-            return normalize_cell_text(await loc.first.inner_text()) 
-    except Exception: 
-        pass 
+    return ""
 
-    return "" 
 
 async def scrape_page(page, url: str) -> List[Row]:
     logging.info("  goto %s", url)
-    await page.goto(url, timeout=60_000, wait_until="domcontentloaded")
+    await page.goto(url, timeout=60_000, wait_until="domcontentloaded")  # //Changed!
     logging.info("  landed %s", page.url)
 
     logging.info("  waiting for grid...")
     await page.wait_for_selector("div[role='row'][data-rowindex]", timeout=60_000)
+    await page.wait_for_selector("xpath=//h2[starts-with(normalize-space(),'Lopp')]", timeout=60_000)  # //Changed!
     logging.info("  grid found")
 
-    nav = page.locator("div[class*='RaceDayNavigator_title'] span")
-    if await nav.count() < 2:
-        return []
+    texts = await _get_nav_texts(page)  # //Changed!
+    track_raw, date_txt = _extract_track_and_date(texts)  # //Changed!
+    if not track_raw or not date_txt:  # //Changed!
+        logging.info("Nav parse failed. texts=%s", texts)  # //Changed!
+        return []  # //Changed!
 
-    track_raw = normalize_cell_text(await nav.nth(0).inner_text())
-    bankod = track_to_bankod(track_raw)
-
-    date_txt = normalize_cell_text(await nav.nth(1).inner_text())
-    datum = int(swedish_date_to_yyyymmdd(date_txt))
+    bankod = track_to_bankod(track_raw)  # //Changed!
+    datum = int(swedish_date_to_yyyymmdd(date_txt))  # //Changed!
 
     data: List[Row] = []
     lopp_headers = page.locator("//h2[starts-with(normalize-space(),'Lopp')]")
@@ -371,17 +405,20 @@ async def scrape_page(page, url: str) -> List[Row]:
             continue
         lopp = int(m.group(1))
 
-        section = header.locator("xpath=ancestor::div[contains(@class,'MuiBox-root')][1]")
+        # info runt rubriken (pris/banförhållande)  # //Changed!
+        info_section = header.locator("xpath=ancestor::div[contains(@class,'MuiBox-root')][1]")  # //Changed!
 
-        pris_text = await _extract_pris_text_from_section(section)
+        # grid ligger efter rubriken  # //Changed!
+        grid = header.locator("xpath=following::div[contains(@class,'MuiDataGrid-root')][1]")  # //Changed!
+
+        pris_text = await _extract_pris_text_from_section(info_section)  # //Changed!
         prizes, min_pris, _ = parse_pris_text(pris_text)
+        lopp_pris = pris_for_lopp(prizes, min_pris)
 
-        lopp_pris = pris_for_lopp(prizes, min_pris)  
-
-        ban_value = await _extract_banforhallande_value_from_section(section)
+        ban_value = await _extract_banforhallande_value_from_section(info_section)  # //Changed!
         underlag_for_lopp = sanitize_underlag(ban_value)
 
-        rows = await section.locator("div[role='row'][data-rowindex]").all()
+        rows = await grid.locator("div[role='row'][data-rowindex]").all()  # //Changed!
         if not rows:
             continue
 
@@ -406,7 +443,6 @@ async def scrape_page(page, url: str) -> List[Row]:
                       const links = Array.from(el.querySelectorAll("a"));
                       if (!links.length) return (el.textContent || "").trim();
 
-                      // Prefer link not inside a "linethrough" container (old/struken kusk)
                       const active = links.filter(a => !a.closest("[class*='linethrough']"));
                       const pick = (active.length ? active : links)[(active.length ? active : links).length - 1];
 
@@ -426,8 +462,6 @@ async def scrape_page(page, url: str) -> List[Row]:
 
             tid_raw = normalize_cell_text(await cell("time").inner_text())
             tid, startmetod, galopp = parse_tid_cell(tid_raw)
-
-            pris = lopp_pris  
 
             odds = None
             try:
@@ -454,7 +488,7 @@ async def scrape_page(page, url: str) -> List[Row]:
                 galopp=galopp,
                 underlag=underlag_for_lopp,
                 kusk=kusk,
-                pris=pris,
+                pris=lopp_pris,
                 odds=odds,
             ))
 
@@ -560,70 +594,50 @@ def write_rows_to_db(rows: List[Row]) -> int:
     return created_n + updated_n
 
 
-def pris_for_lopp(prizes: List[int], min_pris: Optional[int]) -> int:  
-    # Vi vill alltid ge ALLA hästar i loppet första prissumman (plats 1).  
-    if prizes:  
-        return int(prizes[0])  
-    return int(min_pris) if min_pris is not None else 0  
+async def run_range(start_id: int, end_id: int) -> int:
+    base = "https://sportapp.travsport.se/race/raceday/ts{}/results/all"
+    total_scraped = 0
 
-async def run_range(start_id: int, end_id: int) -> int: 
-    base = "https://sportapp.travsport.se/race/raceday/ts{}/results/all" 
-    total_scraped = 0 
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        ctx = await browser.new_context()
+        ctx.set_default_timeout(120_000)
+        page = await ctx.new_page()
 
-    async with async_playwright() as p: 
-        browser = await p.chromium.launch(headless=True) 
-        ctx = await browser.new_context() 
-        ctx.set_default_timeout(120_000) 
-        page = await ctx.new_page() 
+        try:
+            for ts_id in range(start_id, end_id + 1):
+                url = base.format(ts_id)
+                logging.info("Scraping %s", url)
 
-        try: 
-            for ts_id in range(start_id, end_id + 1): 
-                url = base.format(ts_id) 
-                logging.info("Scraping %s", url) 
+                try:
+                    rows = await scrape_page(page, url)
+                except PlaywrightError as exc:
+                    logging.warning("  failed: %s", exc)
+                    continue
+                except Exception as exc:
+                    logging.warning("  failed: %s", exc)
+                    continue
 
-                try: 
-                    rows = await scrape_page(page, url) 
-                except PlaywrightError as exc: 
-                    logging.warning("  failed: %s", exc) 
-                    continue 
-                except Exception as exc: 
-                    logging.warning("  failed: %s", exc) 
-                    continue 
-
-                logging.info("  scraped_rows=%d", len(rows)) 
+                logging.info("  scraped_rows=%d", len(rows))
                 if not rows:
                     continue
 
-                total_scraped += len(rows) 
+                total_scraped += len(rows)
+                await asyncio.to_thread(write_rows_to_db, rows)
 
-                await asyncio.to_thread(write_rows_to_db, rows) 
+        finally:
+            await ctx.close()
+            await browser.close()
 
-        finally: 
-            await ctx.close() 
-            await browser.close() 
+    return total_scraped
 
-    return total_scraped 
 
 class Command(BaseCommand):
     help = "Scrape hard-coded ts-ID range into Result"
 
-    
-    
-    START_ID = 616_120
-    END_ID = 616_145
-    
-    #START_ID = 600_569
-    #END_ID = 601_432
-    
-    # 1 januari 2025 ID: 609600
-    # sista dc 2925 ID  610418
-    
-    # Första januari 2024 ID: 605104
-    # Sista december 2024 ID: 605919
-    
-    # Fösta januari 2023 ts600569
-    # Sista decemer 2023 ts601432
+    START_ID = 616_115
+    END_ID = 616_175
 
     def handle(self, *args, **opts):
-        total = asyncio.run(run_range(self.START_ID, self.END_ID)) 
-        self.stdout.write(self.style.SUCCESS(f"Done. {total} rows scraped & processed.")) 
+        total = asyncio.run(run_range(self.START_ID, self.END_ID))
+        self.stdout.write(self.style.SUCCESS(f"Done. {total} rows scraped & processed."))
