@@ -275,25 +275,25 @@ def track_to_bankod(name: str) -> str:
 
 
 # ---- Nav helpers (bana+datum) ----
-MONTHS_PATTERN = "|".join(SWEDISH_MONTH.keys())  # //Changed!
-DATE_PART_RX = re.compile(rf"\b(\d{{1,2}})\s+({MONTHS_PATTERN})\s+(\d{{4}})\b", re.I)  # //Changed!
-WEEKDAYS = ("MÅNDAG","TISDAG","ONSDAG","TORSDAG","FREDAG","LÖRDAG","SÖNDAG")  # //Changed!
-WEEKDAYS_RX = re.compile(rf"\b(?:{'|'.join(WEEKDAYS)})\b", re.I)  # //Changed!
+MONTHS_PATTERN = "|".join(SWEDISH_MONTH.keys())  
+DATE_PART_RX = re.compile(rf"\b(\d{{1,2}})\s+({MONTHS_PATTERN})\s+(\d{{4}})\b", re.I)  
+WEEKDAYS = ("MÅNDAG","TISDAG","ONSDAG","TORSDAG","FREDAG","LÖRDAG","SÖNDAG")  
+WEEKDAYS_RX = re.compile(rf"\b(?:{'|'.join(WEEKDAYS)})\b", re.I)  
 
-async def _get_nav_texts(page):  # //Changed!
-    for sel in ("[class*='RaceDayNavigator'] span", "header span"):  # //Changed!
-        loc = page.locator(sel)  # //Changed!
-        n = await loc.count()  # //Changed!
-        texts = []  # //Changed!
-        for i in range(n):  # //Changed!
-            t = normalize_cell_text(await loc.nth(i).inner_text())  # //Changed!
-            if t:  # //Changed!
-                texts.append(t)  # //Changed!
-        if texts:  # //Changed!
-            return texts  # //Changed!
-    return []  # //Changed!
+async def _get_nav_texts(page):  
+    for sel in ("[class*='RaceDayNavigator'] span", "header span"):  
+        loc = page.locator(sel)  
+        n = await loc.count()  
+        texts = []  
+        for i in range(n):  
+            t = normalize_cell_text(await loc.nth(i).inner_text())  
+            if t:  
+                texts.append(t)  
+        if texts:  
+            return texts  
+    return []  
 
-def _extract_track_and_date(texts):  # //Changed!
+def _extract_track_and_date(texts):  
     cleaned = [t for t in (texts or []) if t and t.strip()]
     cleaned = [t.strip() for t in cleaned]
 
@@ -375,22 +375,22 @@ async def _extract_pris_text_from_section(section) -> str:
 
 async def scrape_page(page, url: str) -> List[Row]:
     logging.info("  goto %s", url)
-    await page.goto(url, timeout=60_000, wait_until="domcontentloaded")  # //Changed!
+    await page.goto(url, timeout=60_000, wait_until="domcontentloaded")  
     logging.info("  landed %s", page.url)
 
     logging.info("  waiting for grid...")
     await page.wait_for_selector("div[role='row'][data-rowindex]", timeout=60_000)
-    await page.wait_for_selector("xpath=//h2[starts-with(normalize-space(),'Lopp')]", timeout=60_000)  # //Changed!
+    await page.wait_for_selector("xpath=//h2[starts-with(normalize-space(),'Lopp')]", timeout=60_000)  
     logging.info("  grid found")
 
-    texts = await _get_nav_texts(page)  # //Changed!
-    track_raw, date_txt = _extract_track_and_date(texts)  # //Changed!
-    if not track_raw or not date_txt:  # //Changed!
-        logging.info("Nav parse failed. texts=%s", texts)  # //Changed!
-        return []  # //Changed!
+    texts = await _get_nav_texts(page)  
+    track_raw, date_txt = _extract_track_and_date(texts)  
+    if not track_raw or not date_txt:  
+        logging.info("Nav parse failed. texts=%s", texts)  
+        return []  
 
-    bankod = track_to_bankod(track_raw)  # //Changed!
-    datum = int(swedish_date_to_yyyymmdd(date_txt))  # //Changed!
+    bankod = track_to_bankod(track_raw)  
+    datum = int(swedish_date_to_yyyymmdd(date_txt))  
 
     data: List[Row] = []
     lopp_headers = page.locator("//h2[starts-with(normalize-space(),'Lopp')]")
@@ -405,20 +405,20 @@ async def scrape_page(page, url: str) -> List[Row]:
             continue
         lopp = int(m.group(1))
 
-        # info runt rubriken (pris/banförhållande)  # //Changed!
-        info_section = header.locator("xpath=ancestor::div[contains(@class,'MuiBox-root')][1]")  # //Changed!
+        # info runt rubriken (pris/banförhållande)  
+        info_section = header.locator("xpath=ancestor::div[contains(@class,'MuiBox-root')][1]")  
 
-        # grid ligger efter rubriken  # //Changed!
-        grid = header.locator("xpath=following::div[contains(@class,'MuiDataGrid-root')][1]")  # //Changed!
+        # grid ligger efter rubriken  
+        grid = header.locator("xpath=following::div[contains(@class,'MuiDataGrid-root')][1]")  
 
-        pris_text = await _extract_pris_text_from_section(info_section)  # //Changed!
+        pris_text = await _extract_pris_text_from_section(info_section)  
         prizes, min_pris, _ = parse_pris_text(pris_text)
         lopp_pris = pris_for_lopp(prizes, min_pris)
 
-        ban_value = await _extract_banforhallande_value_from_section(info_section)  # //Changed!
+        ban_value = await _extract_banforhallande_value_from_section(info_section)  
         underlag_for_lopp = sanitize_underlag(ban_value)
 
-        rows = await grid.locator("div[role='row'][data-rowindex]").all()  # //Changed!
+        rows = await grid.locator("div[role='row'][data-rowindex]").all()  
         if not rows:
             continue
 
@@ -635,13 +635,9 @@ async def run_range(start_id: int, end_id: int) -> int:
 class Command(BaseCommand):
     help = "Scrape hard-coded ts-ID range into Result"
 
-    ##START_ID = 616_115
-    ##END_ID = 616_175
+    START_ID = 616_115
+    END_ID = 616_175
     
-    ##ts609832
-    
-    START_ID = 609_832
-    END_ID = 609_850
 
     def handle(self, *args, **opts):
         total = asyncio.run(run_range(self.START_ID, self.END_ID))

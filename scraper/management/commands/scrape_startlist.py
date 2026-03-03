@@ -88,25 +88,25 @@ def track_to_bankod(n: str) -> str:
 
 
 # ---- Nav helpers (bana+datum) ----
-MONTHS_PATTERN = "|".join(SWEDISH_MONTH.keys())  # //Changed!
-DATE_PART_RX = re.compile(rf"\b(\d{{1,2}})\s+({MONTHS_PATTERN})\s+(\d{{4}})\b", re.I)  # //Changed!
-WEEKDAYS = ("MÅNDAG","TISDAG","ONSDAG","TORSDAG","FREDAG","LÖRDAG","SÖNDAG")  # //Changed!
-WEEKDAYS_RX = re.compile(rf"\b(?:{'|'.join(WEEKDAYS)})\b", re.I)  # //Changed!
+MONTHS_PATTERN = "|".join(SWEDISH_MONTH.keys())  
+DATE_PART_RX = re.compile(rf"\b(\d{{1,2}})\s+({MONTHS_PATTERN})\s+(\d{{4}})\b", re.I)  
+WEEKDAYS = ("MÅNDAG","TISDAG","ONSDAG","TORSDAG","FREDAG","LÖRDAG","SÖNDAG")  
+WEEKDAYS_RX = re.compile(rf"\b(?:{'|'.join(WEEKDAYS)})\b", re.I)  
 
-async def _get_nav_texts(page):  # //Changed!
-    for sel in ("[class*='RaceDayNavigator'] span", "header span"):  # //Changed!
-        loc = page.locator(sel)  # //Changed!
-        n = await loc.count()  # //Changed!
-        texts = []  # //Changed!
-        for i in range(n):  # //Changed!
-            t = normalize_cell_text(await loc.nth(i).inner_text())  # //Changed!
-            if t:  # //Changed!
-                texts.append(t)  # //Changed!
-        if texts:  # //Changed!
-            return texts  # //Changed!
-    return []  # //Changed!
+async def _get_nav_texts(page):  
+    for sel in ("[class*='RaceDayNavigator'] span", "header span"):  
+        loc = page.locator(sel)  
+        n = await loc.count()  
+        texts = []  
+        for i in range(n):  
+            t = normalize_cell_text(await loc.nth(i).inner_text())  
+            if t:  
+                texts.append(t)  
+        if texts:  
+            return texts  
+    return []  
 
-def _extract_track_and_date(texts):  # //Changed!
+def _extract_track_and_date(texts):  
     cleaned = [t for t in (texts or []) if t and t.strip()]
     cleaned = [t.strip() for t in cleaned]
 
@@ -117,7 +117,7 @@ def _extract_track_and_date(texts):  # //Changed!
         m = DATE_PART_RX.search(t.upper())
         if m:
             date_container = t
-            date_part = m.group(0).upper()  # ex: "27 FEBRUARI 2026"  # //Changed!
+            date_part = m.group(0).upper()  # ex: "27 FEBRUARI 2026"  
             break
 
     if not date_part:
@@ -172,42 +172,42 @@ async def scrape_startlist(url: str) -> List[StartRow]:
         page = await ctx.new_page()
 
         try:
-            await page.goto(url, timeout=0, wait_until="domcontentloaded")  # //Changed!
+            await page.goto(url, timeout=0, wait_until="domcontentloaded")  
         except PlaywrightError:
             await browser.close()
             return []
 
         try:
-            await page.wait_for_selector("div[role='row'][data-rowindex]", timeout=60_000)  # //Changed!
-            await page.wait_for_selector("xpath=//h2[starts-with(normalize-space(),'Lopp')]", timeout=60_000)  # //Changed!
+            await page.wait_for_selector("div[role='row'][data-rowindex]", timeout=60_000)  
+            await page.wait_for_selector("xpath=//h2[starts-with(normalize-space(),'Lopp')]", timeout=60_000)  
         except PlaywrightError:
             await browser.close()
             return []
 
-        texts = await _get_nav_texts(page)  # //Changed!
-        raw_track, date_txt = _extract_track_and_date(texts)  # //Changed!
-        if not raw_track or not date_txt:  # //Changed!
-            logging.info("Nav parse failed. texts=%s", texts)  # //Changed!
+        texts = await _get_nav_texts(page)  
+        raw_track, date_txt = _extract_track_and_date(texts)  
+        if not raw_track or not date_txt:  
+            logging.info("Nav parse failed. texts=%s", texts)  
             await browser.close()
-            return []  # //Changed!
+            return []  
 
-        bankod = track_to_bankod(raw_track)  # //Changed!
-        startdatum = int(swedish_date_to_yyyymmdd(date_txt))  # //Changed!
+        bankod = track_to_bankod(raw_track)  
+        startdatum = int(swedish_date_to_yyyymmdd(date_txt))  
 
         out: List[StartRow] = []
         lopp_headers = page.locator("//h2[starts-with(normalize-space(),'Lopp')]")
         for i in range(await lopp_headers.count()):
             header = lopp_headers.nth(i)
-            await header.scroll_into_view_if_needed()  # //Changed!
+            await header.scroll_into_view_if_needed()  
 
             m = re.search(r"Lopp\s+(\d+)", normalize_cell_text(await header.inner_text()))
             if not m:
                 continue
             lopp_nr = int(m.group(1))
 
-            # Griden ligger numera efter rubriken (inte i samma ancestor-box)  # //Changed!
-            grid = header.locator("xpath=following::div[contains(@class,'MuiDataGrid-root')][1]")  # //Changed!
-            rows = await grid.locator("div[role='row'][data-rowindex]").all()  # //Changed!
+            # Griden ligger numera efter rubriken (inte i samma ancestor-box)  
+            grid = header.locator("xpath=following::div[contains(@class,'MuiDataGrid-root')][1]")  
+            rows = await grid.locator("div[role='row'][data-rowindex]").all()  
             if not rows:
                 logging.info("Lopp %s: inga rader, hoppar över", lopp_nr)
                 continue
@@ -215,38 +215,38 @@ async def scrape_startlist(url: str) -> List[StartRow]:
             for row in rows:
                 cell = lambda f: row.locator(f"div[data-field='{f}']")
 
-                # Startlista använder mobilehorse (du verifierade i console)  # //Changed!
-                horse_cell = cell("mobilehorse")  # //Changed!
-                if await horse_cell.count() == 0:  # //Changed!
-                    horse_cell = cell("horse")  # //Changed!
+                # Startlista använder mobilehorse (du verifierade i console)  
+                horse_cell = cell("mobilehorse")  
+                if await horse_cell.count() == 0:  
+                    horse_cell = cell("horse")  
 
-                # Struken: mer tolerant matchning  # //Changed!
-                is_struken = (await horse_cell.locator("[class*='linethrough']").count()) > 0  # //Changed!
+                # Struken: mer tolerant matchning  
+                is_struken = (await horse_cell.locator("[class*='linethrough']").count()) > 0  
 
-                # Robust nr: försök först som tidigare (div:first), annars regex på celltext  # //Changed!
-                nr = None  # //Changed!
-                try:  # //Changed!
-                    nr_txt = normalize_cell_text(await horse_cell.locator("div").first.inner_text())  # //Changed!
-                    nr_m = re.search(r"\d+", nr_txt)  # //Changed!
-                    if nr_m:  # //Changed!
-                        nr = int(nr_m.group(0))  # //Changed!
-                except Exception:  # //Changed!
-                    nr = None  # //Changed!
+                # Robust nr: försök först som tidigare (div:first), annars regex på celltext  
+                nr = None  
+                try:  
+                    nr_txt = normalize_cell_text(await horse_cell.locator("div").first.inner_text())  
+                    nr_m = re.search(r"\d+", nr_txt)  
+                    if nr_m:  
+                        nr = int(nr_m.group(0))  
+                except Exception:  
+                    nr = None  
 
-                if nr is None:  # //Changed!
-                    horse_text = normalize_cell_text(await horse_cell.inner_text())  # //Changed!
-                    nr_m = re.search(r"\b(\d{1,2})\b", horse_text)  # //Changed!
-                    if not nr_m:  # //Changed!
-                        continue  # //Changed!
-                    nr = int(nr_m.group(1))  # //Changed!
+                if nr is None:  
+                    horse_text = normalize_cell_text(await horse_cell.inner_text())  
+                    nr_m = re.search(r"\b(\d{1,2})\b", horse_text)  
+                    if not nr_m:  
+                        continue  
+                    nr = int(nr_m.group(1))  
 
-                # Namn: försök span, annars text utan nr  # //Changed!
-                namn_raw = ""  # //Changed!
-                if await horse_cell.locator("span").count() > 0:  # //Changed!
-                    namn_raw = normalize_cell_text(await horse_cell.locator("span").first.inner_text())  # //Changed!
-                if not namn_raw:  # //Changed!
-                    horse_text = normalize_cell_text(await horse_cell.inner_text())  # //Changed!
-                    namn_raw = re.sub(r"^\s*\d+\s*", "", horse_text).strip()  # //Changed!
+                # Namn: försök span, annars text utan nr  
+                namn_raw = ""  
+                if await horse_cell.locator("span").count() > 0:  
+                    namn_raw = normalize_cell_text(await horse_cell.locator("span").first.inner_text())  
+                if not namn_raw:  
+                    horse_text = normalize_cell_text(await horse_cell.inner_text())  
+                    namn_raw = re.sub(r"^\s*\d+\s*", "", horse_text).strip()  
 
                 namn = normalize_startlista_name(namn_raw)
 
