@@ -635,8 +635,13 @@ async def run_range(start_id: int, end_id: int) -> int:
 class Command(BaseCommand):
     help = "Scrape hard-coded ts-ID range into Result"
 
-    START_ID = 616_115
-    END_ID = 616_175
+    ##START_ID = 616_115
+    ##END_ID = 616_175
+    
+    ##ts609832
+    
+    START_ID = 609_832
+    END_ID = 609_850
 
     def handle(self, *args, **opts):
         total = asyncio.run(run_range(self.START_ID, self.END_ID))
