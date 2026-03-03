@@ -83,11 +83,50 @@ FULLNAME_TO_BANKOD = {
 FULLNAME_TO_BANKOD |= {_strip(k): v for k, v in FULLNAME_TO_BANKOD.items()}
 
 def track_to_bankod(n: str) -> str:
-    n = normalize_cell_text(n).upper()
-    return FULLNAME_TO_BANKOD.get(n, FULLNAME_TO_BANKOD.get(_strip(n), n[:2].title()))
+    n = normalize_cell_text(n).upper().strip()  
+    n = _strip_nav_prefixes(n)  
+    if not n:  
+        return ""  
+
+    hit = FULLNAME_TO_BANKOD.get(n)  
+    if hit:  
+        return hit  
+
+    n_ascii = _strip(n)  
+    hit2 = FULLNAME_TO_BANKOD.get(n_ascii)  
+    if hit2:  
+        return hit2  
+
+    fallback = n[:2].title()  
+    logging.warning("Unknown track name=%r (ascii=%r). Using fallback bankod=%r", n, n_ascii, fallback)  
+    return fallback  
+
+NAV_PREFIXES = (  
+    "TÄVLINGSDAGSRESULTAT",  
+    "DAGSRESULTAT",          
+    "STARTLISTA",            
+    "TÄVLINGSDAG",           
+    "TRAVTÄVLING",           
+    "DAG",                   
+)  
+
+def _strip_nav_prefixes(up: str) -> str:  
+    s = (up or "").strip()  
+    changed = True  
+    while changed and s:  
+        changed = False  
+        for p in NAV_PREFIXES:  
+            if s == p:  
+                s = ""  
+                changed = True  
+                break  
+            if s.startswith(p + " "):  
+                s = s[len(p):].strip()  
+                changed = True  
+                break  
+    return s  
 
 
-# ---- Nav helpers (bana+datum) ----
 MONTHS_PATTERN = "|".join(SWEDISH_MONTH.keys())  
 DATE_PART_RX = re.compile(rf"\b(\d{{1,2}})\s+({MONTHS_PATTERN})\s+(\d{{4}})\b", re.I)  
 WEEKDAYS = ("MÅNDAG","TISDAG","ONSDAG","TORSDAG","FREDAG","LÖRDAG","SÖNDAG")  
@@ -106,50 +145,51 @@ async def _get_nav_texts(page):
             return texts  
     return []  
 
-def _extract_track_and_date(texts):  
-    cleaned = [t for t in (texts or []) if t and t.strip()]
-    cleaned = [t.strip() for t in cleaned]
+def _extract_track_and_date(texts):
+    cleaned = [t for t in (texts or []) if t and t.strip()]  
+    cleaned = [t.strip() for t in cleaned]  
 
-    date_container = None
-    date_part = None
+    date_container = None  
+    date_part = None  
 
-    for t in cleaned:
-        m = DATE_PART_RX.search(t.upper())
-        if m:
-            date_container = t
-            date_part = m.group(0).upper()  # ex: "27 FEBRUARI 2026"  
-            break
+    for t in cleaned:  
+        m = DATE_PART_RX.search(t.upper())  
+        if m:  
+            date_container = t  
+            date_part = m.group(0).upper()  
+            break  
 
-    if not date_part:
-        return None, None
+    if not date_part:  
+        return None, None  
 
-    # track i egen span (t.ex. "UMÅKER") om det finns
-    track_txt = None
-    for t in cleaned:
-        if t == date_container:
-            continue
-        if re.search(r"\d", t):
-            continue
-        up = t.upper()
-        if up in ("STARTLISTA", "DAGSRESULTAT", "TÄVLINGSDAGSRESULTAT"):
-            continue
-        track_txt = up
-        break
+    track_txt = None  
+    for t in cleaned:  
+        if t == date_container:  
+            continue  
+        if re.search(r"\d", t):  
+            continue  
 
-    # annars: track + datum ligger i samma rad (t.ex. "DAG ESKILSTUNA FREDAG 27 FEBRUARI 2026")
-    if not track_txt and date_container:
-        up = date_container.upper()
-        up = up.replace(date_part, " ")
-        up = WEEKDAYS_RX.sub(" ", up)
+        up = t.upper().strip()  
+        up = _strip_nav_prefixes(up)  
+        if not up:  
+            continue  
 
-        up = up.strip()
-        for prefix in ("TÄVLINGSDAG", "TRAVTÄVLING", "DAG"):
-            if up.startswith(prefix):
-                up = up[len(prefix):].strip()
-        track_txt = re.sub(r"\s+", " ", up).strip()
+        if any(up == p or up.startswith(p + " ") for p in NAV_PREFIXES):  
+            continue  
 
-    return track_txt, date_part
+        track_txt = up  
+        break  
 
+    if not track_txt and date_container:  
+        up = date_container.upper()  
+        up = up.replace(date_part, " ")  
+        up = WEEKDAYS_RX.sub(" ", up)  
+        up = re.sub(r"\s+", " ", up).strip()  
+
+        up = _strip_nav_prefixes(up)  
+        track_txt = re.sub(r"\s+", " ", up).strip()  
+
+    return track_txt, date_part  
 
 @dataclass
 class StartRow:
@@ -205,7 +245,6 @@ async def scrape_startlist(url: str) -> List[StartRow]:
                 continue
             lopp_nr = int(m.group(1))
 
-            # Griden ligger numera efter rubriken (inte i samma ancestor-box)  
             grid = header.locator("xpath=following::div[contains(@class,'MuiDataGrid-root')][1]")  
             rows = await grid.locator("div[role='row'][data-rowindex]").all()  
             if not rows:
@@ -329,8 +368,7 @@ def upsert_resultat_from_startrow(r: StartRow):
 class Command(BaseCommand):
     help = "Scrape hard-coded ts-ID range into Startlista (and also seed Resultat for today/future only)"
 
-    # 2026
-    START_ID = 616_120
+    START_ID = 616_150
     END_ID   = 616_180
 
     def handle(self, *args, **kwargs):
