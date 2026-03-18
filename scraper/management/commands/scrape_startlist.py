@@ -368,7 +368,6 @@ def upsert_resultat_from_startrow(r: StartRow):
 class Command(BaseCommand):
     help = "Scrape hard-coded ts-ID range into Startlista (and also seed Resultat for today/future only)"
 
-
     START_ID = 616_170
     END_ID   = 616_200
 
