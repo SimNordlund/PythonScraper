@@ -119,8 +119,11 @@ def map_placering_value(raw: str):
     if mr:
         token = mr.group(1)
 
-    if token in ("k", "p", "str", "d"):
+    if token in ("k", "p", "str"):
         return 99
+    
+    if token in ("d"):
+        return 15
 
     if not token.isdigit() or len(token) > 2:
         return None
@@ -634,8 +637,8 @@ async def run_range(start_id: int, end_id: int) -> int:
 class Command(BaseCommand):
     help = "Scrape hard-coded ts-ID range into Result"
 
-    START_ID = 616_210
-    END_ID = 616_250
+    START_ID = 616_250
+    END_ID = 616_270
     
 
     def handle(self, *args, **opts):
