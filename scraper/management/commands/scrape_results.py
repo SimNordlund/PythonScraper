@@ -382,14 +382,16 @@ async def _extract_pris_text_from_section(section) -> str:
 
 
 async def scrape_page(page, url: str) -> List[Row]:
-    logging.info("  goto %s", url)
-    await page.goto(url, timeout=60_000, wait_until="domcontentloaded")  
-    logging.info("  landed %s", page.url)
+    try:
+        await page.goto(url, timeout=60_000, wait_until="domcontentloaded")
+    except PlaywrightError:
+        return []
 
-    logging.info("  waiting for grid...")
-    await page.wait_for_selector("div[role='row'][data-rowindex]", timeout=60_000)
-    await page.wait_for_selector("xpath=//h2[starts-with(normalize-space(),'Lopp')]", timeout=60_000)  
-    logging.info("  grid found")
+    try:
+        await page.wait_for_selector("div[role='row'][data-rowindex]", timeout=60_000)
+        await page.wait_for_selector("xpath=//h2[starts-with(normalize-space(),'Lopp')]", timeout=60_000)
+    except PlaywrightError:
+        return []
 
     texts = await _get_nav_texts(page)  
     track_raw, date_txt = _extract_track_and_date(texts)  
@@ -403,7 +405,6 @@ async def scrape_page(page, url: str) -> List[Row]:
     data: List[Row] = []
     lopp_headers = page.locator("//h2[starts-with(normalize-space(),'Lopp')]")
     header_count = await lopp_headers.count()
-    logging.info("  found %d lopp headers", header_count)
 
     for i in range(header_count):
         header = lopp_headers.nth(i)
@@ -716,8 +717,8 @@ async def run_range(start_id: int, end_id: int) -> int:
                     logging.warning("  failed: %s", exc)
                     continue
 
-                logging.info("  scraped_rows=%d", len(rows))
                 if not rows:
+                    logging.info("  no rows")
                     continue
 
                 total_scraped += len(rows)
