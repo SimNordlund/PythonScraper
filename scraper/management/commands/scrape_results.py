@@ -3,8 +3,11 @@
 import asyncio, re, unicodedata, logging
 from dataclasses import dataclass
 from typing import List, Tuple, Optional
-from django.core.management.base import BaseCommand
+from datetime import date, timedelta
+from urllib.parse import urljoin
+from django.core.management.base import BaseCommand, CommandError
 from django.db import IntegrityError
+from django.utils import timezone
 from playwright.async_api import async_playwright, Error as PlaywrightError
 from scraper.models import HorseResult
 
@@ -16,6 +19,8 @@ SWEDISH_MONTH = {
     "JUNI": 6, "JULI": 7, "AUGUSTI": 8, "SEPTEMBER": 9, "OKTOBER": 10,
     "NOVEMBER": 11, "DECEMBER": 12,
 }
+SWEDISH_MONTH_BY_NUMBER = {v: k.lower() for k, v in SWEDISH_MONTH.items()}
+CALENDAR_URL = "https://sportapp.travsport.se/race/calendar/race?year={year}&competition=SPORT&month={month:02d}"
 
 def swedish_date_to_yyyymmdd(text: str) -> str:
     parts = (text or "").strip().upper().split()
@@ -597,6 +602,96 @@ def write_rows_to_db(rows: List[Row]) -> int:
     return created_n + updated_n
 
 
+def _parse_ts_id(value: str) -> int:
+    return int(str(value).replace("_", ""))
+
+
+def _parse_iso_date(value: str) -> date:
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(f"Invalid date {value!r}. Use YYYY-MM-DD.") from exc
+
+
+def _format_ts_id(ts_id: int) -> str:
+    s = str(ts_id)
+    return f"{s[:-3]}_{s[-3:]}" if len(s) > 3 else s
+
+
+def _results_ts_id_from_href(href: str) -> Optional[int]:
+    m = re.search(r"/race/raceday/ts(\d+)/results", href or "")
+    return int(m.group(1)) if m else None
+
+
+async def find_first_results_ts_id_for_date(target_day: date) -> Optional[int]:
+    calendar_url = CALENDAR_URL.format(year=target_day.year, month=target_day.month)
+    month_name = SWEDISH_MONTH_BY_NUMBER[target_day.month]
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        ctx = await browser.new_context()
+        ctx.set_default_timeout(120_000)
+        page = await ctx.new_page()
+
+        try:
+            await page.goto(calendar_url, timeout=0, wait_until="domcontentloaded")
+            await page.wait_for_selector("h2", timeout=60_000)
+
+            href = None
+            for _ in range(30):
+                href = await page.evaluate(
+                    """
+                    ({ day, monthName }) => {
+                        const normalize = (value) => (value || "")
+                            .normalize("NFKD")
+                            .replace(/\\s+/g, " ")
+                            .trim()
+                            .toLowerCase();
+                        const datePattern = new RegExp(`(?:^|\\\\D)${day}\\\\s+${monthName}(?:\\\\b|$)`, "i");
+                        const headers = Array.from(document.querySelectorAll("h2"));
+                        const index = headers.findIndex((header) => datePattern.test(normalize(header.textContent)));
+                        if (index === -1) {
+                            return null;
+                        }
+
+                        const header = headers[index];
+                        const nextHeader = headers[index + 1] || null;
+                        const links = Array.from(document.querySelectorAll("a[href*='/race/raceday/ts'][href*='/results']"));
+                        const before = (left, right) => Boolean(left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+                        for (const link of links) {
+                            if (!before(header, link)) {
+                                continue;
+                            }
+                            if (nextHeader && !before(link, nextHeader)) {
+                                continue;
+                            }
+                            return link.getAttribute("href");
+                        }
+
+                        return null;
+                    }
+                    """,
+                    {"day": target_day.day, "monthName": month_name},
+                )
+                if href:
+                    break
+                await page.mouse.wheel(0, 2500)
+                await page.wait_for_timeout(250)
+
+        except PlaywrightError:
+            href = None
+        finally:
+            await ctx.close()
+            await browser.close()
+
+    if not href:
+        return None
+
+    full_href = urljoin("https://sportapp.travsport.se", href)
+    return _results_ts_id_from_href(full_href)
+
+
 async def run_range(start_id: int, end_id: int) -> int:
     base = "https://sportapp.travsport.se/race/raceday/ts{}/results/all"
     total_scraped = 0
@@ -635,7 +730,7 @@ async def run_range(start_id: int, end_id: int) -> int:
     return total_scraped
 
 class Command(BaseCommand):
-    help = "Scrape hard-coded ts-ID range into Result"
+    help = "Scrape Result from the calendar ts-ID 5 days back, or from manual ts-ID options"
 
     START_ID = 616_260
     END_ID = 616_310
@@ -644,6 +739,82 @@ class Command(BaseCommand):
    # END_ID = 616_290
     
 
+    def add_arguments(self, parser):
+        parser.add_argument(
+            "--manual-ids",
+            action="store_true",
+            help="Use the hard-coded START_ID and END_ID values in this command.",
+        )
+        parser.add_argument(
+            "--start-id",
+            type=_parse_ts_id,
+            help="Manual first raceday ts-ID, for example 616_290.",
+        )
+        parser.add_argument(
+            "--end-id",
+            type=_parse_ts_id,
+            help="Manual last raceday ts-ID, for example 616_310.",
+        )
+        parser.add_argument(
+            "--ids-after-start",
+            type=int,
+            default=30,
+            help="How many IDs after the auto/manual start ID to include when END_ID is not provided.",
+        )
+        parser.add_argument(
+            "--days-back",
+            type=int,
+            default=5,
+            help="How many days back to use for the automatic calendar lookup.",
+        )
+        parser.add_argument(
+            "--calendar-date",
+            type=_parse_iso_date,
+            help="Find the first Resultat ts-ID from this date instead of using --days-back. Use YYYY-MM-DD.",
+        )
+
+    def _resolve_id_range(self, opts):
+        ids_after_start = opts["ids_after_start"]
+        if ids_after_start < 0:
+            raise CommandError("--ids-after-start must be 0 or greater.")
+
+        days_back = opts["days_back"]
+        if days_back < 0:
+            raise CommandError("--days-back must be 0 or greater.")
+
+        start_id = opts.get("start_id")
+        end_id = opts.get("end_id")
+
+        if start_id is not None:
+            resolved_end_id = end_id if end_id is not None else start_id + ids_after_start
+            return start_id, resolved_end_id, "manual command-line IDs"
+
+        if end_id is not None:
+            raise CommandError("--end-id requires --start-id.")
+
+        if opts.get("manual_ids"):
+            return self.START_ID, self.END_ID, "hard-coded START_ID/END_ID"
+
+        target_day = opts.get("calendar_date") or (timezone.localdate() - timedelta(days=days_back))
+        logging.info("Finding first Resultat ts-ID for %s", target_day.isoformat())
+        resolved_start_id = asyncio.run(find_first_results_ts_id_for_date(target_day))
+
+        if resolved_start_id is None:
+            raise CommandError(f"Could not find a Resultat link for {target_day.isoformat()} in the race calendar.")
+
+        return resolved_start_id, resolved_start_id + ids_after_start, f"calendar date {target_day.isoformat()}"
+
     def handle(self, *args, **opts):
-        total = asyncio.run(run_range(self.START_ID, self.END_ID))
+        start_id, end_id, source = self._resolve_id_range(opts)
+        if end_id < start_id:
+            raise CommandError("END_ID must be greater than or equal to START_ID.")
+
+        logging.info(
+            "Using %s range: ts%s through ts%s",
+            source,
+            _format_ts_id(start_id),
+            _format_ts_id(end_id),
+        )
+
+        total = asyncio.run(run_range(start_id, end_id))
         self.stdout.write(self.style.SUCCESS(f"Done. {total} rows scraped & processed."))
