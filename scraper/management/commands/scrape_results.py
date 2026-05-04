@@ -282,7 +282,6 @@ def track_to_bankod(name: str) -> str:
     return _ASCII_FALLBACK.get(name_ascii, name_up[:2].title())
 
 
-# ---- Nav helpers (bana+datum) ----
 MONTHS_PATTERN = "|".join(SWEDISH_MONTH.keys())  
 DATE_PART_RX = re.compile(rf"\b(\d{{1,2}})\s+({MONTHS_PATTERN})\s+(\d{{4}})\b", re.I)  
 WEEKDAYS = ("MÅNDAG","TISDAG","ONSDAG","TORSDAG","FREDAG","LÖRDAG","SÖNDAG")  

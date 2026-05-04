@@ -257,15 +257,13 @@ async def scrape_startlist(url: str) -> List[StartRow]:
             for row in rows:
                 cell = lambda f: row.locator(f"div[data-field='{f}']")
 
-                # Startlista använder mobilehorse (du verifierade i console)  
+                # Startlista använder mobilehorse??
                 horse_cell = cell("mobilehorse")  
                 if await horse_cell.count() == 0:  
                     horse_cell = cell("horse")  
 
-                # Struken: mer tolerant matchning  
                 is_struken = (await horse_cell.locator("[class*='linethrough']").count()) > 0  
 
-                # Robust nr: försök först som tidigare (div:first), annars regex på celltext  
                 nr = None  
                 try:  
                     nr_txt = normalize_cell_text(await horse_cell.locator("div").first.inner_text())  
@@ -282,7 +280,6 @@ async def scrape_startlist(url: str) -> List[StartRow]:
                         continue  
                     nr = int(nr_m.group(1))  
 
-                # Namn: försök span, annars text utan nr  
                 namn_raw = ""  
                 if await horse_cell.locator("span").count() > 0:  
                     namn_raw = normalize_cell_text(await horse_cell.locator("span").first.inner_text())  
