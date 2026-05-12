@@ -257,7 +257,7 @@ async def scrape_startlist(url: str) -> List[StartRow]:
             for row in rows:
                 cell = lambda f: row.locator(f"div[data-field='{f}']")
 
-                # Startlista använder mobilehorse??
+                # Startlista använder mobilehorse??????????????
                 horse_cell = cell("mobilehorse")  
                 if await horse_cell.count() == 0:  
                     horse_cell = cell("horse")  

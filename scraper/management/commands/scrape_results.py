@@ -413,10 +413,8 @@ async def scrape_page(page, url: str) -> List[Row]:
             continue
         lopp = int(m.group(1))
 
-        # info runt rubriken (pris/banförhållande)  
         info_section = header.locator("xpath=ancestor::div[contains(@class,'MuiBox-root')][1]")  
 
-        # grid ligger efter rubriken  
         grid = header.locator("xpath=following::div[contains(@class,'MuiDataGrid-root')][1]")  
 
         pris_text = await _extract_pris_text_from_section(info_section)  
@@ -734,9 +732,6 @@ class Command(BaseCommand):
 
     START_ID = 616_260
     END_ID = 616_310
-    
-   # START_ID = 616_057
-   # END_ID = 616_290
     
 
     def add_arguments(self, parser):
