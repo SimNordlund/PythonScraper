@@ -634,7 +634,7 @@ async def find_first_results_ts_id_for_date(target_day: date) -> Optional[int]:
             await page.wait_for_selector("h2", timeout=60_000)
 
             href = None
-            for _ in range(30):
+            for _ in range(25):
                 href = await page.evaluate(
                     """
                     ({ day, monthName }) => {
@@ -751,7 +751,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--ids-after-start",
             type=int,
-            default=30,
+            default=25,
             help="How many IDs after the auto/manual start ID to include when END_ID is not provided.",
         )
         parser.add_argument(
