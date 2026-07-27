@@ -619,9 +619,81 @@ def _results_ts_id_from_href(href: str) -> Optional[int]:
     return int(m.group(1)) if m else None
 
 
+def _short_log_text(value: str, limit: int = 600) -> str:
+    return re.sub(r"\s+", " ", value or "").strip()[:limit]
+
+
+async def _log_calendar_lookup_diagnostics(page, target_day: date, month_name: str, reason: str) -> None:
+    try:
+        diagnostics = await page.evaluate(
+            """
+            ({ day, monthName }) => {
+                const normalize = (value) => (value || "")
+                    .normalize("NFKD")
+                    .replace(/\\s+/g, " ")
+                    .trim()
+                    .toLowerCase();
+                const datePattern = new RegExp(`(?:^|\\\\D)${day}\\\\s+${monthName}(?:\\\\b|$)`, "i");
+                const headers = Array.from(document.querySelectorAll("h2")).map((header, index) => ({
+                    index,
+                    text: normalize(header.textContent).slice(0, 160),
+                }));
+                const matchIndex = headers.findIndex((header) => datePattern.test(header.text));
+                const resultLinks = Array.from(document.querySelectorAll("a[href*='/race/raceday/ts'][href*='/results']")).map((link) => ({
+                    text: normalize(link.textContent).slice(0, 120),
+                    href: link.getAttribute("href"),
+                }));
+                const raceLinks = Array.from(document.querySelectorAll("a[href*='/race/raceday/ts']")).map((link) => ({
+                    text: normalize(link.textContent).slice(0, 120),
+                    href: link.getAttribute("href"),
+                }));
+                const nearbyHeaders = matchIndex === -1
+                    ? headers.slice(0, 12)
+                    : headers.slice(Math.max(0, matchIndex - 3), matchIndex + 4);
+
+                return {
+                    pageUrl: location.href,
+                    title: document.title,
+                    bodyText: normalize(document.body?.innerText || "").slice(0, 600),
+                    h2Count: headers.length,
+                    matchIndex,
+                    nearbyHeaders,
+                    resultLinkCount: resultLinks.length,
+                    sampleResultLinks: resultLinks.slice(0, 12),
+                    raceLinkCount: raceLinks.length,
+                    sampleRaceLinks: raceLinks.slice(0, 20),
+                };
+            }
+            """,
+            {"day": target_day.day, "monthName": month_name},
+        )
+    except Exception as exc:
+        logging.warning("Calendar diagnostics failed after %s: %s", reason, exc)
+        return
+
+    logging.warning(
+        "Calendar lookup diagnostics after %s: target=%s page_url=%s title=%r "
+        "h2_count=%s matching_header_index=%s result_link_count=%s race_link_count=%s "
+        "nearby_headers=%s sample_result_links=%s sample_race_links=%s body_sample=%r",
+        reason,
+        target_day.isoformat(),
+        diagnostics.get("pageUrl"),
+        diagnostics.get("title"),
+        diagnostics.get("h2Count"),
+        diagnostics.get("matchIndex"),
+        diagnostics.get("resultLinkCount"),
+        diagnostics.get("raceLinkCount"),
+        diagnostics.get("nearbyHeaders"),
+        diagnostics.get("sampleResultLinks"),
+        diagnostics.get("sampleRaceLinks"),
+        _short_log_text(diagnostics.get("bodyText", "")),
+    )
+
+
 async def find_first_results_ts_id_for_date(target_day: date) -> Optional[int]:
     calendar_url = CALENDAR_URL.format(year=target_day.year, month=target_day.month)
     month_name = SWEDISH_MONTH_BY_NUMBER[target_day.month]
+    href = None
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
@@ -630,10 +702,15 @@ async def find_first_results_ts_id_for_date(target_day: date) -> Optional[int]:
         page = await ctx.new_page()
 
         try:
-            await page.goto(calendar_url, timeout=0, wait_until="domcontentloaded")
+            logging.info("Opening Resultat calendar URL: %s", calendar_url)
+            response = await page.goto(calendar_url, timeout=0, wait_until="domcontentloaded")
+            logging.info(
+                "Resultat calendar loaded: status=%s final_url=%s",
+                response.status if response else None,
+                page.url,
+            )
             await page.wait_for_selector("h2", timeout=60_000)
 
-            href = None
             for _ in range(25):
                 href = await page.evaluate(
                     """
@@ -675,7 +752,17 @@ async def find_first_results_ts_id_for_date(target_day: date) -> Optional[int]:
                 await page.mouse.wheel(0, 2500)
                 await page.wait_for_timeout(250)
 
-        except PlaywrightError:
+            if not href:
+                await _log_calendar_lookup_diagnostics(page, target_day, month_name, "no Resultat link found")
+
+        except PlaywrightError as exc:
+            logging.exception(
+                "Resultat calendar lookup failed with PlaywrightError for target=%s url=%s: %s",
+                target_day.isoformat(),
+                calendar_url,
+                exc,
+            )
+            await _log_calendar_lookup_diagnostics(page, target_day, month_name, "PlaywrightError")
             href = None
         finally:
             await ctx.close()
@@ -686,7 +773,6 @@ async def find_first_results_ts_id_for_date(target_day: date) -> Optional[int]:
 
     full_href = urljoin("https://sportapp.travsport.se", href)
     return _results_ts_id_from_href(full_href)
-
 
 async def run_range(start_id: int, end_id: int) -> int:
     base = "https://sportapp.travsport.se/race/raceday/ts{}/results/all"
