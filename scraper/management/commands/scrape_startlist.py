@@ -10,6 +10,29 @@ from scraper.models import StartList, HorseResult
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
+ROW_SELECTOR = "div[role='row'][data-rowindex]"
+LOPP_HEADER_SELECTOR = "xpath=//h2[starts-with(normalize-space(),'Lopp')]"
+BROWSER_ARGS = [
+    "--disable-dev-shm-usage",
+    "--no-sandbox",
+]
+BROWSER_CONTEXT = {
+    "viewport": {"width": 1440, "height": 1200},
+    "locale": "sv-SE",
+    "timezone_id": "Europe/Stockholm",
+    "user_agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ),
+}
+
+
+async def _new_browser_context(p):
+    browser = await p.chromium.launch(headless=True, args=BROWSER_ARGS)
+    ctx = await browser.new_context(**BROWSER_CONTEXT)
+    ctx.set_default_timeout(120_000)
+    return browser, ctx
+
 
 SWEDISH_MONTH = {
     "JANUARI": 1, "FEBRUARI": 2, "MARS": 3, "APRIL": 4, "MAJ": 5,
@@ -207,33 +230,39 @@ class StartRow:
 
 async def scrape_startlist(url: str) -> List[StartRow]:
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        ctx = await browser.new_context()
-        ctx.set_default_timeout(120_000)
+        browser, ctx = await _new_browser_context(p)
         page = await ctx.new_page()
+        response_status = None
 
         try:
-            await page.goto(url, timeout=0, wait_until="domcontentloaded")  
-        except PlaywrightError:
+            response = await page.goto(url, timeout=0, wait_until="domcontentloaded")
+            response_status = response.status if response else None
+        except PlaywrightError as exc:
+            await _log_startlist_page_diagnostics(page, url, "goto failed", response_status, exc)
+            await ctx.close()
             await browser.close()
             return []
 
         try:
-            await page.wait_for_selector("div[role='row'][data-rowindex]", timeout=60_000)  
-            await page.wait_for_selector("xpath=//h2[starts-with(normalize-space(),'Lopp')]", timeout=60_000)  
-        except PlaywrightError:
+            await page.wait_for_selector(ROW_SELECTOR, timeout=120_000)
+            await page.wait_for_selector(LOPP_HEADER_SELECTOR, timeout=120_000)
+        except PlaywrightError as exc:
+            await _log_startlist_page_diagnostics(page, url, "rows/header timeout", response_status, exc)
+            await ctx.close()
             await browser.close()
             return []
 
-        texts = await _get_nav_texts(page)  
-        raw_track, date_txt = _extract_track_and_date(texts)  
-        if not raw_track or not date_txt:  
-            logging.info("Nav parse failed. texts=%s", texts)  
+        texts = await _get_nav_texts(page)
+        raw_track, date_txt = _extract_track_and_date(texts)
+        if not raw_track or not date_txt:
+            logging.info("Nav parse failed. texts=%s", texts)
+            await _log_startlist_page_diagnostics(page, url, "nav parse failed", response_status)
+            await ctx.close()
             await browser.close()
-            return []  
+            return []
 
-        bankod = track_to_bankod(raw_track)  
-        startdatum = int(swedish_date_to_yyyymmdd(date_txt))  
+        bankod = track_to_bankod(raw_track)
+        startdatum = int(swedish_date_to_yyyymmdd(date_txt))
 
         out: List[StartRow] = []
         lopp_headers = page.locator("//h2[starts-with(normalize-space(),'Lopp')]")
@@ -305,6 +334,7 @@ async def scrape_startlist(url: str) -> List[StartRow]:
                     struken=is_struken,
                 ))
 
+        await ctx.close()
         await browser.close()
         return out
 
@@ -336,6 +366,56 @@ def _startlist_ts_id_from_href(href: str) -> Optional[int]:
 
 def _short_log_text(value: str, limit: int = 600) -> str:
     return re.sub(r"\s+", " ", value or "").strip()[:limit]
+
+
+async def _log_startlist_page_diagnostics(page, url: str, reason: str, response_status=None, exc: Optional[Exception] = None) -> None:
+    try:
+        diagnostics = await page.evaluate(
+            """
+            () => {
+                const normalize = (value) => (value || "").replace(/\s+/g, " ").trim();
+                const rows = Array.from(document.querySelectorAll("div[role='row'][data-rowindex]"));
+                const h2s = Array.from(document.querySelectorAll("h2"));
+                const grids = Array.from(document.querySelectorAll("div[class*='MuiDataGrid-root']"));
+                const dataFields = Array.from(document.querySelectorAll("div[data-field]"))
+                    .map((node) => node.getAttribute("data-field"))
+                    .filter(Boolean);
+
+                return {
+                    pageUrl: location.href,
+                    title: document.title,
+                    readyState: document.readyState,
+                    bodyText: normalize(document.body?.innerText || "").slice(0, 900),
+                    rowCount: rows.length,
+                    h2Count: h2s.length,
+                    h2Texts: h2s.map((node) => normalize(node.textContent).slice(0, 120)).slice(0, 12),
+                    gridCount: grids.length,
+                    dataFields: Array.from(new Set(dataFields)).slice(0, 30),
+                };
+            }
+            """
+        )
+    except Exception as diag_exc:
+        logging.warning("Startlista diagnostics failed for %s after %s: %s", url, reason, diag_exc)
+        return
+
+    logging.warning(
+        "Startlista diagnostics after %s: target_url=%s status=%s page_url=%s title=%r "
+        "ready_state=%s row_count=%s h2_count=%s grid_count=%s h2_texts=%s data_fields=%s body_sample=%r error=%s",
+        reason,
+        url,
+        response_status,
+        diagnostics.get("pageUrl"),
+        diagnostics.get("title"),
+        diagnostics.get("readyState"),
+        diagnostics.get("rowCount"),
+        diagnostics.get("h2Count"),
+        diagnostics.get("gridCount"),
+        diagnostics.get("h2Texts"),
+        diagnostics.get("dataFields"),
+        _short_log_text(diagnostics.get("bodyText", ""), 700),
+        exc,
+    )
 
 
 async def _log_calendar_lookup_diagnostics(page, target_day: date, month_name: str, reason: str) -> None:
