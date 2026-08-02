@@ -698,7 +698,7 @@ async def find_first_results_ts_id_for_date(target_day: date) -> Optional[int]:
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         ctx = await browser.new_context()
-        ctx.set_default_timeout(120_000)
+        ctx.set_default_timeout(60_000)
         page = await ctx.new_page()
 
         try:
@@ -781,7 +781,7 @@ async def run_range(start_id: int, end_id: int) -> int:
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         ctx = await browser.new_context()
-        ctx.set_default_timeout(120_000)
+        ctx.set_default_timeout(60_000)
         page = await ctx.new_page()
 
         try:

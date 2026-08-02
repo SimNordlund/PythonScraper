@@ -244,8 +244,8 @@ async def scrape_startlist(url: str) -> List[StartRow]:
             return []
 
         try:
-            await page.wait_for_selector(ROW_SELECTOR, timeout=120_000)
-            await page.wait_for_selector(LOPP_HEADER_SELECTOR, timeout=120_000)
+            await page.wait_for_selector(ROW_SELECTOR, timeout=60_000)
+            await page.wait_for_selector(LOPP_HEADER_SELECTOR, timeout=60_000)
         except PlaywrightError as exc:
             await _log_startlist_page_diagnostics(page, url, "rows/header timeout", response_status, exc)
             await ctx.close()
