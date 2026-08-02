@@ -1,0 +1,54 @@
+name: Run scraper on Fly
+
+on:
+  schedule:
+    # GitHub cron is UTC. These four UTC times cover 09:00 and 23:00
+    # in Europe/Stockholm across both CET and CEST.
+    - cron: "0 7,8,21,22 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pythonscraper-fly-machine
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Check Stockholm run time
+        id: schedule
+        shell: bash
+        run: |
+          hour="$(TZ=Europe/Stockholm date +'%H')"
+          now="$(TZ=Europe/Stockholm date +'%Y-%m-%d %H:%M:%S %Z')"
+          echo "Stockholm time: $now"
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" || "$hour" == "09" || "$hour" == "23" ]]; then
+            echo "run_scraper=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run_scraper=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping because this UTC trigger is only for DST coverage."
+          fi
+
+      - name: Set up flyctl
+        if: steps.schedule.outputs.run_scraper == 'true'
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Run scraper Machine
+        if: steps.schedule.outputs.run_scraper == 'true'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          flyctl machine run docker.io/simonnordlund/pythonscraper:latest \
+            --app pythonscraper \
+            --region arn \
+            --rm \
+            --restart no \
+            --vm-memory 2048 \
+            --vm-cpus 2 \
+            python manage.py scrape_daily
