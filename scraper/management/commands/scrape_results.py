@@ -380,13 +380,13 @@ async def _extract_pris_text_from_section(section) -> str:
 
 async def scrape_page(page, url: str) -> List[Row]:
     try:
-        await page.goto(url, timeout=60_000, wait_until="domcontentloaded")
+        await page.goto(url, timeout=120_000, wait_until="domcontentloaded")
     except PlaywrightError:
         return []
 
     try:
-        await page.wait_for_selector("div[role='row'][data-rowindex]", timeout=60_000)
-        await page.wait_for_selector("xpath=//h2[starts-with(normalize-space(),'Lopp')]", timeout=60_000)
+        await page.wait_for_selector("div[role='row'][data-rowindex]", timeout=120_000)
+        await page.wait_for_selector("xpath=//h2[starts-with(normalize-space(),'Lopp')]", timeout=120_000)
     except PlaywrightError:
         return []
 
@@ -698,7 +698,7 @@ async def find_first_results_ts_id_for_date(target_day: date) -> Optional[int]:
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         ctx = await browser.new_context()
-        ctx.set_default_timeout(60_000)
+        ctx.set_default_timeout(120_000)
         page = await ctx.new_page()
 
         try:
@@ -709,7 +709,7 @@ async def find_first_results_ts_id_for_date(target_day: date) -> Optional[int]:
                 response.status if response else None,
                 page.url,
             )
-            await page.wait_for_selector("h2", timeout=60_000)
+            await page.wait_for_selector("h2", timeout=120_000)
 
             for _ in range(25):
                 href = await page.evaluate(
@@ -781,7 +781,7 @@ async def run_range(start_id: int, end_id: int) -> int:
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         ctx = await browser.new_context()
-        ctx.set_default_timeout(60_000)
+        ctx.set_default_timeout(120_000)
         page = await ctx.new_page()
 
         try:
