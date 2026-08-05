@@ -28,11 +28,27 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
-          flyctl machine run docker.io/simonnordlund/pythonscraper:latest \
+          set -euo pipefail
+
+          run_output="$(flyctl machine run docker.io/simonnordlund/pythonscraper:latest \
             --app pythonscraper \
             --region arn \
             --rm \
             --restart no \
             --vm-memory 2048 \
             --vm-cpus 2 \
-            python manage.py scrape_daily
+            --detach \
+            python manage.py scrape_daily)"
+
+          echo "$run_output"
+
+          machine_id="$(echo "$run_output" | awk '/Machine ID:/ {print $3; exit}')"
+          if [ -z "$machine_id" ]; then
+            echo "Could not find Machine ID in flyctl output" >&2
+            exit 1
+          fi
+
+          flyctl machine wait "$machine_id" \
+            --app pythonscraper \
+            --state started \
+            --wait-timeout 5m
