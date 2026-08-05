@@ -47,7 +47,6 @@ def swedish_date_to_yyyymmdd(txt: str) -> str:
     d, m, y = (p[1], p[2], p[3]) if len(p) == 4 else p
     return f"{int(y):04d}{SWEDISH_MONTH[m]:02d}{int(d):02d}"
 
-
 def normalize_cell_text(s: str) -> str:
     if s is None:
         return ""
