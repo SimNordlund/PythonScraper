@@ -42,6 +42,20 @@ SWEDISH_MONTH = {
 SWEDISH_MONTH_BY_NUMBER = {v: k.lower() for k, v in SWEDISH_MONTH.items()}
 CALENDAR_URL = "https://sportapp.travsport.se/race/calendar/race?year={year}&competition=SPORT&month={month:02d}"
 
+
+class TravsportRequestBlocked(RuntimeError):
+    pass
+
+
+async def _is_threat_protection_response(page, response_status: Optional[int]) -> bool:
+    if response_status == 403:
+        return True
+
+    try:
+        return (await page.title()).strip().lower() == "threat protection - request blocked"
+    except PlaywrightError:
+        return False
+
 def swedish_date_to_yyyymmdd(txt: str) -> str:
     p = (txt or "").strip().upper().split()
     d, m, y = (p[1], p[2], p[3]) if len(p) == 4 else p
@@ -242,6 +256,21 @@ async def scrape_startlist(url: str) -> List[StartRow]:
             await browser.close()
             return []
 
+        if await _is_threat_protection_response(page, response_status):
+            await _log_startlist_page_diagnostics(page, url, "request blocked", response_status)
+            await ctx.close()
+            await browser.close()
+            raise TravsportRequestBlocked(
+                "Travsport blocked the request with HTTP 403. Stop retrying and try again later; "
+                "if the block persists, contact the site administrator and include the incident ID from the log."
+            )
+
+        if response_status is not None and response_status >= 400:
+            await _log_startlist_page_diagnostics(page, url, "HTTP error", response_status)
+            await ctx.close()
+            await browser.close()
+            return []
+
         try:
             await page.wait_for_selector(ROW_SELECTOR, timeout=120_000)
             await page.wait_for_selector(LOPP_HEADER_SELECTOR, timeout=120_000)
@@ -372,7 +401,7 @@ async def _log_startlist_page_diagnostics(page, url: str, reason: str, response_
         diagnostics = await page.evaluate(
             """
             () => {
-                const normalize = (value) => (value || "").replace(/\s+/g, " ").trim();
+                const normalize = (value) => (value || "").replace(/\\s+/g, " ").trim();
                 const rows = Array.from(document.querySelectorAll("div[role='row'][data-rowindex]"));
                 const h2s = Array.from(document.querySelectorAll("h2"));
                 const grids = Array.from(document.querySelectorAll("div[class*='MuiDataGrid-root']"));
@@ -490,9 +519,7 @@ async def find_first_startlist_ts_id_for_date(target_day: date) -> Optional[int]
     href = None
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        ctx = await browser.new_context()
-        ctx.set_default_timeout(120_000)
+        browser, ctx = await _new_browser_context(p)
         page = await ctx.new_page()
 
         try:
@@ -503,6 +530,20 @@ async def find_first_startlist_ts_id_for_date(target_day: date) -> Optional[int]
                 response.status if response else None,
                 page.url,
             )
+
+            response_status = response.status if response else None
+            if await _is_threat_protection_response(page, response_status):
+                await _log_calendar_lookup_diagnostics(page, target_day, month_name, "request blocked")
+                raise TravsportRequestBlocked(
+                    "Travsport blocked the calendar request with HTTP 403. The scraper cannot safely discover "
+                    f"the ts-ID for {target_day.isoformat()} while the block is active. Try again later; if the "
+                    "block persists, contact the site administrator and include the incident ID from the log."
+                )
+
+            if response_status is not None and response_status >= 400:
+                await _log_calendar_lookup_diagnostics(page, target_day, month_name, f"HTTP {response_status}")
+                return None
+
             await page.wait_for_selector("h2", timeout=120_000)
 
             for _ in range(30):
@@ -672,7 +713,10 @@ class Command(BaseCommand):
 
         target_day = opts.get("calendar_date") or (timezone.localdate() - timedelta(days=1))
         logging.info("Finding first Startlista ts-ID for %s", target_day.isoformat())
-        resolved_start_id = asyncio.run(find_first_startlist_ts_id_for_date(target_day))
+        try:
+            resolved_start_id = asyncio.run(find_first_startlist_ts_id_for_date(target_day))
+        except TravsportRequestBlocked as exc:
+            raise CommandError(str(exc)) from exc
 
         if resolved_start_id is None:
             raise CommandError(f"Could not find a Startlista link for {target_day.isoformat()} in the race calendar.")
@@ -702,6 +746,8 @@ class Command(BaseCommand):
 
             try:
                 rows = asyncio.run(scrape_startlist(url))
+            except TravsportRequestBlocked as exc:
+                raise CommandError(str(exc)) from exc
             except Exception as exc:
                 logging.warning("  failed: %s", exc)
                 continue
