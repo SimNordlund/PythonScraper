@@ -2,10 +2,9 @@ name: Run scraper on Fly
 
 on:
   schedule:
-    # GitHub cron is UTC. During Swedish summer time, these are
-    # 09:00 and 23:00 in Europe/Stockholm.
-    # During Swedish winter time, change this to: "0 8,22 * * *"
-    - cron: "0 7,21 * * *"
+    # One scheduled run per day: 09:17 Swedish summer time / 08:17 winter time.
+    # Shared PostgreSQL limits also cover manual runs and disposable machines.
+    - cron: "17 7 * * *"
   workflow_dispatch:
 
 permissions:

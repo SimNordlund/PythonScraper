@@ -1,13 +1,15 @@
-import asyncio, re, unicodedata, logging
+import asyncio, re, unicodedata, logging, random
 from dataclasses import dataclass
 from typing import List, Tuple, Optional
 from datetime import date, timedelta
 from urllib.parse import urljoin
+from zoneinfo import ZoneInfo
 from django.core.management.base import BaseCommand, CommandError
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.utils import timezone
-from playwright.async_api import async_playwright, Error as PlaywrightError
+from playwright.async_api import Error as PlaywrightError
 from scraper.models import HorseResult
+from scraper.polite import ScrapePolicy, ScrapeStopped
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
@@ -378,15 +380,15 @@ async def _extract_pris_text_from_section(section) -> str:
     return ""
 
 
-async def scrape_page(page, url: str) -> List[Row]:
+async def scrape_page(page, url: str, policy: ScrapePolicy) -> List[Row]:
     try:
-        await page.goto(url, timeout=120_000, wait_until="domcontentloaded")
+        await policy.goto(page, url)
     except PlaywrightError:
         return []
 
     try:
-        await page.wait_for_selector("div[role='row'][data-rowindex]", timeout=120_000)
-        await page.wait_for_selector("xpath=//h2[starts-with(normalize-space(),'Lopp')]", timeout=120_000)
+        await policy.wait_for_selector(page, "div[role='row'][data-rowindex]", timeout=120_000)
+        await policy.wait_for_selector(page, "xpath=//h2[starts-with(normalize-space(),'Lopp')]", timeout=120_000)
     except PlaywrightError:
         return []
 
@@ -404,6 +406,7 @@ async def scrape_page(page, url: str) -> List[Row]:
     header_count = await lopp_headers.count()
 
     for i in range(header_count):
+        policy.check()
         header = lopp_headers.nth(i)
         await header.scroll_into_view_if_needed()
         m = re.search(r"Lopp\s+(\d+)", normalize_cell_text(await header.inner_text()))
@@ -427,6 +430,7 @@ async def scrape_page(page, url: str) -> List[Row]:
             continue
 
         for row in rows:
+            policy.check()
             cell = lambda f: row.locator(f"div[data-field='{f}']")
 
             nr_txt = normalize_cell_text(await cell("horse").locator("div").first.inner_text())
@@ -496,9 +500,11 @@ async def scrape_page(page, url: str) -> List[Row]:
                 odds=odds,
             ))
 
+    await policy.check_page(page)
     return data
 
 
+@transaction.atomic
 def write_rows_to_db(rows: List[Row]) -> int:
     created_n = 0
     updated_n = 0
@@ -529,7 +535,7 @@ def write_rows_to_db(rows: List[Row]) -> int:
             )
         except IntegrityError as e:
             logging.exception("DB IntegrityError for (%s,%s,L%s,%s): %s", r.datum, r.bankod, r.lopp, namn_clean, e)
-            continue
+            raise
 
         if created:
             created_n += 1
@@ -619,204 +625,182 @@ def _results_ts_id_from_href(href: str) -> Optional[int]:
     return int(m.group(1)) if m else None
 
 
-def _short_log_text(value: str, limit: int = 600) -> str:
-    return re.sub(r"\s+", " ", value or "").strip()[:limit]
+RESULTS_URL = "https://sportapp.travsport.se/race/raceday/ts{}/results/all"
+RESULTS_CACHE_SECONDS = 24 * 60 * 60
+CALENDAR_CACHE_SECONDS = 6 * 60 * 60
 
 
-async def _log_calendar_lookup_diagnostics(page, target_day: date, month_name: str, reason: str) -> None:
+async def _calendar_results_for_month(page, policy: ScrapePolicy, month: date):
+    """Discover real result links once per month, including lazy-loaded sections."""
+    cache_key = f"results-calendar:{month.year}-{month.month:02d}"
+    cached = policy.cached(cache_key, CALENDAR_CACHE_SECONDS)
+    if cached is not None:
+        logging.info("Using cached Resultat calendar for %s", month.strftime("%Y-%m"))
+        return cached
+
+    calendar_url = CALENDAR_URL.format(year=month.year, month=month.month)
+    month_name = SWEDISH_MONTH_BY_NUMBER[month.month]
+    results = {}
+    complete = False
     try:
-        diagnostics = await page.evaluate(
-            """
-            ({ day, monthName }) => {
-                const normalize = (value) => (value || "")
-                    .normalize("NFKD")
-                    .replace(/\\s+/g, " ")
-                    .trim()
-                    .toLowerCase();
-                const datePattern = new RegExp(`(?:^|\\\\D)${day}\\\\s+${monthName}(?:\\\\b|$)`, "i");
-                const headers = Array.from(document.querySelectorAll("h2")).map((header, index) => ({
-                    index,
-                    text: normalize(header.textContent).slice(0, 160),
-                }));
-                const matchIndex = headers.findIndex((header) => datePattern.test(header.text));
-                const resultLinks = Array.from(document.querySelectorAll("a[href*='/race/raceday/ts'][href*='/results']")).map((link) => ({
-                    text: normalize(link.textContent).slice(0, 120),
-                    href: link.getAttribute("href"),
-                }));
-                const raceLinks = Array.from(document.querySelectorAll("a[href*='/race/raceday/ts']")).map((link) => ({
-                    text: normalize(link.textContent).slice(0, 120),
-                    href: link.getAttribute("href"),
-                }));
-                const nearbyHeaders = matchIndex === -1
-                    ? headers.slice(0, 12)
-                    : headers.slice(Math.max(0, matchIndex - 3), matchIndex + 4);
-
-                return {
-                    pageUrl: location.href,
-                    title: document.title,
-                    bodyText: normalize(document.body?.innerText || "").slice(0, 600),
-                    h2Count: headers.length,
-                    matchIndex,
-                    nearbyHeaders,
-                    resultLinkCount: resultLinks.length,
-                    sampleResultLinks: resultLinks.slice(0, 12),
-                    raceLinkCount: raceLinks.length,
-                    sampleRaceLinks: raceLinks.slice(0, 20),
-                };
-            }
-            """,
-            {"day": target_day.day, "monthName": month_name},
+        logging.info("Opening Resultat calendar URL: %s", calendar_url)
+        await policy.goto(page, calendar_url)
+        await policy.wait_for_selector(page, "h2", timeout=120_000)
+        await policy.wait_for_selector(
+            page, "a[href*='/race/raceday/ts'][href*='/results']", timeout=120_000
         )
-    except Exception as exc:
-        logging.warning("Calendar diagnostics failed after %s: %s", reason, exc)
-        return
+        previous_sample = None
+        stable_bottom = 0
 
-    logging.warning(
-        "Calendar lookup diagnostics after %s: target=%s page_url=%s title=%r "
-        "h2_count=%s matching_header_index=%s result_link_count=%s race_link_count=%s "
-        "nearby_headers=%s sample_result_links=%s sample_race_links=%s body_sample=%r",
-        reason,
-        target_day.isoformat(),
-        diagnostics.get("pageUrl"),
-        diagnostics.get("title"),
-        diagnostics.get("h2Count"),
-        diagnostics.get("matchIndex"),
-        diagnostics.get("resultLinkCount"),
-        diagnostics.get("raceLinkCount"),
-        diagnostics.get("nearbyHeaders"),
-        diagnostics.get("sampleResultLinks"),
-        diagnostics.get("sampleRaceLinks"),
-        _short_log_text(diagnostics.get("bodyText", "")),
-    )
-
-
-async def find_first_results_ts_id_for_date(target_day: date) -> Optional[int]:
-    calendar_url = CALENDAR_URL.format(year=target_day.year, month=target_day.month)
-    month_name = SWEDISH_MONTH_BY_NUMBER[target_day.month]
-    href = None
-
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        ctx = await browser.new_context()
-        ctx.set_default_timeout(120_000)
-        page = await ctx.new_page()
-
-        try:
-            logging.info("Opening Resultat calendar URL: %s", calendar_url)
-            response = await page.goto(calendar_url, timeout=0, wait_until="domcontentloaded")
-            logging.info(
-                "Resultat calendar loaded: status=%s final_url=%s",
-                response.status if response else None,
-                page.url,
-            )
-            await page.wait_for_selector("h2", timeout=120_000)
-
-            for _ in range(25):
-                href = await page.evaluate(
-                    """
-                    ({ day, monthName }) => {
-                        const normalize = (value) => (value || "")
-                            .normalize("NFKD")
-                            .replace(/\\s+/g, " ")
-                            .trim()
-                            .toLowerCase();
-                        const datePattern = new RegExp(`(?:^|\\\\D)${day}\\\\s+${monthName}(?:\\\\b|$)`, "i");
-                        const headers = Array.from(document.querySelectorAll("h2"));
-                        const index = headers.findIndex((header) => datePattern.test(normalize(header.textContent)));
-                        if (index === -1) {
-                            return null;
-                        }
-
-                        const header = headers[index];
-                        const nextHeader = headers[index + 1] || null;
-                        const links = Array.from(document.querySelectorAll("a[href*='/race/raceday/ts'][href*='/results']"));
-                        const before = (left, right) => Boolean(left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING);
-
+        for _ in range(40):
+            await policy.check_page(page)
+            snapshot = await page.evaluate(
+                r"""
+                (monthName) => {
+                    const normalize = (value) => (value || "")
+                        .normalize("NFKD")
+                        .replace(/\s+/g, " ")
+                        .trim()
+                        .toLowerCase();
+                    const datePattern = new RegExp(`(?:^|\\D)(\\d{1,2})\\s+${monthName}(?:\\b|$)`, "i");
+                    const headers = Array.from(document.querySelectorAll("h2"));
+                    const links = Array.from(document.querySelectorAll("a[href*='/race/raceday/ts'][href*='/results']"));
+                    const before = (left, right) => Boolean(left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING);
+                    const days = {};
+                    for (let i = 0; i < headers.length; i++) {
+                        const match = datePattern.exec(normalize(headers[i].textContent));
+                        if (!match) continue;
+                        const day = String(Number(match[1]));
+                        if (!days[day]) days[day] = [];
                         for (const link of links) {
-                            if (!before(header, link)) {
-                                continue;
+                            if (before(headers[i], link) && (!headers[i + 1] || before(link, headers[i + 1]))) {
+                                days[day].push(link.getAttribute("href"));
                             }
-                            if (nextHeader && !before(link, nextHeader)) {
-                                continue;
-                            }
-                            return link.getAttribute("href");
                         }
-
-                        return null;
                     }
-                    """,
-                    {"day": target_day.day, "monthName": month_name},
-                )
-                if href:
-                    break
-                await page.mouse.wheel(0, 2500)
-                await page.wait_for_timeout(250)
-
-            if not href:
-                await _log_calendar_lookup_diagnostics(page, target_day, month_name, "no Resultat link found")
-
-        except PlaywrightError as exc:
-            logging.exception(
-                "Resultat calendar lookup failed with PlaywrightError for target=%s url=%s: %s",
-                target_day.isoformat(),
-                calendar_url,
-                exc,
+                    const root = document.scrollingElement || document.documentElement;
+                    return {
+                        days,
+                        top: root.scrollTop,
+                        height: root.scrollHeight,
+                        viewport: root.clientHeight,
+                        atBottom: root.clientHeight > 0 && root.scrollTop + root.clientHeight >= root.scrollHeight - 8,
+                    };
+                }
+                """,
+                month_name,
             )
-            await _log_calendar_lookup_diagnostics(page, target_day, month_name, "PlaywrightError")
-            href = None
-        finally:
-            await ctx.close()
-            await browser.close()
+            for day, hrefs in snapshot["days"].items():
+                ids = results.setdefault(day, [])
+                for href in hrefs:
+                    ts_id = _results_ts_id_from_href(urljoin("https://sportapp.travsport.se", href))
+                    if ts_id is not None and ts_id not in ids:
+                        ids.append(ts_id)
 
-    if not href:
-        return None
+            loading = await page.locator(
+                ".MuiDataGrid-loadingOverlay:visible, [role='progressbar']:visible, [aria-busy='true']:visible"
+            ).count()
+            sample = (
+                snapshot["top"], snapshot["height"], snapshot["viewport"],
+                tuple((day, tuple(ids)) for day, ids in sorted(results.items())),
+            )
+            if snapshot["atBottom"] and not loading and sample == previous_sample:
+                stable_bottom += 1
+                if stable_bottom >= 3:
+                    complete = True
+                    break
+            else:
+                stable_bottom = 0
+            previous_sample = sample
+            if not snapshot["atBottom"]:
+                await page.evaluate("window.scrollBy(0, Math.max(1, window.innerHeight * 0.8))")
+            # Request pacing can leave updates queued after a scroll; one
+            # unchanged sample is not enough to treat discovery as complete.
+            await asyncio.sleep(max(5, policy.request_max) + random.uniform(1, 3))
 
-    full_href = urljoin("https://sportapp.travsport.se", href)
-    return _results_ts_id_from_href(full_href)
+        await policy.check_page(page)
+    except ScrapeStopped:
+        raise
+    except PlaywrightError as exc:
+        await policy.failure(page, calendar_url, f"Resultat calendar failed: {exc}")
+        return {}
 
-async def run_range(start_id: int, end_id: int) -> int:
-    base = "https://sportapp.travsport.se/race/raceday/ts{}/results/all"
+    if not complete:
+        await policy.failure(page, calendar_url, "Resultat calendar did not settle at the bottom; partial discovery was not cached")
+        return {}
+
+    if not any(results.values()):
+        logging.warning("No usable Resultat calendar links found for %s.", month.strftime("%Y-%m"))
+        await policy.failure(page, calendar_url, "Resultat calendar contained no usable result links")
+        return {}
+
+    policy.remember(cache_key, results)
+    policy.success(calendar_url)
+    return results
+
+
+async def _discover_result_ids(page, policy: ScrapePolicy, first_day: date, last_day: date):
+    ids = []
+    month = first_day.replace(day=1)
+    while month <= last_day:
+        policy.check()
+        month_results = await _calendar_results_for_month(page, policy, month)
+        for day in sorted(month_results, key=int):
+            result_day = month.replace(day=int(day))
+            if first_day <= result_day <= last_day:
+                for ts_id in month_results[day]:
+                    if ts_id not in ids:
+                        ids.append(ts_id)
+        month = (month.replace(day=28) + timedelta(days=4)).replace(day=1)
+    return ids
+
+
+async def run_results(policy: ScrapePolicy, manual_range, first_day, last_day, ids_after_start) -> int:
     total_scraped = 0
+    async with policy.browser() as page:
+        if manual_range is not None:
+            start_id, end_id = manual_range
+            ts_ids = range(start_id, end_id + 1)
+        else:
+            ts_ids = await _discover_result_ids(page, policy, first_day, last_day)
+            if not ts_ids:
+                logging.info("No Resultat links found between %s and %s.", first_day, last_day)
+                return 0
+            if ids_after_start is not None:
+                start_id = ts_ids[0]
+                ts_ids = range(start_id, start_id + ids_after_start + 1)
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        ctx = await browser.new_context()
-        ctx.set_default_timeout(120_000)
-        page = await ctx.new_page()
+        for ts_id in ts_ids:
+            policy.check()
+            url = RESULTS_URL.format(ts_id)
+            if policy.is_recent(url, RESULTS_CACHE_SECONDS):
+                logging.info("Skipping %s; successfully processed within the last 24 hours.", url)
+                continue
+            logging.info("Scraping %s", url)
+            try:
+                rows = await scrape_page(page, url, policy)
+            except ScrapeStopped:
+                raise
+            except Exception as exc:
+                await policy.failure(page, url, f"Result parsing failed: {exc}")
+                continue
+            if not rows:
+                await policy.failure(page, url, "Result page contained no usable rows")
+                continue
 
-        try:
-            for ts_id in range(start_id, end_id + 1):
-                url = base.format(ts_id)
-                logging.info("Scraping %s", url)
-
-                try:
-                    rows = await scrape_page(page, url)
-                except PlaywrightError as exc:
-                    logging.warning("  failed: %s", exc)
-                    continue
-                except Exception as exc:
-                    logging.warning("  failed: %s", exc)
-                    continue
-
-                if not rows:
-                    logging.info("  no rows")
-                    continue
-
-                total_scraped += len(rows)
-                await asyncio.to_thread(write_rows_to_db, rows)
-
-        finally:
-            await ctx.close()
-            await browser.close()
+            await asyncio.to_thread(write_rows_to_db, rows)
+            policy.check()
+            policy.success(url)
+            total_scraped += len(rows)
 
     return total_scraped
 
+
 class Command(BaseCommand):
-    help = "Scrape Result from the calendar ts-ID 5 days back, or from manual ts-ID options"
+    help = "Scrape actual Resultat calendar links from 5 days back through today, or explicit manual IDs."
 
     START_ID = 616_260
     END_ID = 616_310
-    
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -827,73 +811,62 @@ class Command(BaseCommand):
         parser.add_argument(
             "--start-id",
             type=_parse_ts_id,
-            help="Manual first raceday ts-ID, for example 616_290.",
+            help="Manual raceday ts-ID; only this ID is fetched unless a range is explicitly supplied.",
         )
         parser.add_argument(
             "--end-id",
             type=_parse_ts_id,
-            help="Manual last raceday ts-ID, for example 616_310.",
+            help="Manual last raceday ts-ID, for example 616_310. Requires --start-id.",
         )
         parser.add_argument(
             "--ids-after-start",
             type=int,
-            default=25,
-            help="How many IDs after the auto/manual start ID to include when END_ID is not provided.",
+            default=None,
+            help="Explicitly add this many sequential IDs after --start-id or the first link on the calendar date. The default follows actual calendar links.",
         )
         parser.add_argument(
             "--days-back",
             type=int,
             default=5,
-            help="How many days back to use for the automatic calendar lookup.",
+            help="Include calendar results from this many days ago through today (default: 5).",
         )
         parser.add_argument(
             "--calendar-date",
             type=_parse_iso_date,
-            help="Find the first Resultat ts-ID from this date instead of using --days-back. Use YYYY-MM-DD.",
+            help="Scrape actual Resultat links for this date only. Use YYYY-MM-DD.",
         )
 
-    def _resolve_id_range(self, opts):
-        ids_after_start = opts["ids_after_start"]
-        if ids_after_start < 0:
+    def handle(self, *args, **opts):
+        ids_after_start = opts.get("ids_after_start")
+        if ids_after_start is not None and ids_after_start < 0:
             raise CommandError("--ids-after-start must be 0 or greater.")
-
         days_back = opts["days_back"]
         if days_back < 0:
             raise CommandError("--days-back must be 0 or greater.")
 
         start_id = opts.get("start_id")
         end_id = opts.get("end_id")
-
+        manual_range = None
         if start_id is not None:
-            resolved_end_id = end_id if end_id is not None else start_id + ids_after_start
-            return start_id, resolved_end_id, "manual command-line IDs"
-
-        if end_id is not None:
+            end_id = end_id if end_id is not None else start_id + (ids_after_start or 0)
+            if start_id <= 0 or end_id < start_id:
+                raise CommandError("IDs must be positive and --end-id must be greater than or equal to --start-id.")
+            manual_range = (start_id, end_id)
+        elif end_id is not None:
             raise CommandError("--end-id requires --start-id.")
+        elif opts.get("manual_ids"):
+            if self.START_ID <= 0 or self.END_ID < self.START_ID:
+                raise CommandError("START_ID must be positive and END_ID must be greater than or equal to START_ID.")
+            manual_range = (self.START_ID, self.END_ID)
 
-        if opts.get("manual_ids"):
-            return self.START_ID, self.END_ID, "hard-coded START_ID/END_ID"
+        today = timezone.localdate(timezone=ZoneInfo("Europe/Stockholm"))
+        first_day = opts.get("calendar_date") or (today - timedelta(days=days_back))
+        last_day = first_day if opts.get("calendar_date") or ids_after_start is not None else today
+        if manual_range is not None:
+            logging.info("Using manual range: ts%s through ts%s", *map(_format_ts_id, manual_range))
+        else:
+            logging.info("Finding Resultat links from %s through %s.", first_day, last_day)
 
-        target_day = opts.get("calendar_date") or (timezone.localdate() - timedelta(days=days_back))
-        logging.info("Finding first Resultat ts-ID for %s", target_day.isoformat())
-        resolved_start_id = asyncio.run(find_first_results_ts_id_for_date(target_day))
-
-        if resolved_start_id is None:
-            raise CommandError(f"Could not find a Resultat link for {target_day.isoformat()} in the race calendar.")
-
-        return resolved_start_id, resolved_start_id + ids_after_start, f"calendar date {target_day.isoformat()}"
-
-    def handle(self, *args, **opts):
-        start_id, end_id, source = self._resolve_id_range(opts)
-        if end_id < start_id:
-            raise CommandError("END_ID must be greater than or equal to START_ID.")
-
-        logging.info(
-            "Using %s range: ts%s through ts%s",
-            source,
-            _format_ts_id(start_id),
-            _format_ts_id(end_id),
-        )
-
-        total = asyncio.run(run_range(start_id, end_id))
+        with ScrapePolicy() as policy:
+            total = asyncio.run(run_results(policy, manual_range, first_day, last_day, ids_after_start))
         self.stdout.write(self.style.SUCCESS(f"Done. {total} rows scraped & processed."))

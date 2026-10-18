@@ -1,39 +1,22 @@
 import asyncio, re, unicodedata, logging
+import random
 from dataclasses import dataclass
 from typing import List, Optional
 from datetime import date, timedelta
-from urllib.parse import urljoin
+from zoneinfo import ZoneInfo
 from django.utils import timezone
-from playwright.async_api import async_playwright, Error as PlaywrightError
+from django.db import transaction
+from playwright.async_api import Error as PlaywrightError
 from django.core.management.base import BaseCommand, CommandError
 from scraper.models import StartList, HorseResult
+from scraper.polite import ScrapePolicy, ScrapeStopped
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
 ROW_SELECTOR = "div[role='row'][data-rowindex]"
 LOPP_HEADER_SELECTOR = "xpath=//h2[starts-with(normalize-space(),'Lopp')]"
-BROWSER_ARGS = [
-    "--disable-dev-shm-usage",
-    "--no-sandbox",
-]
-BROWSER_CONTEXT = {
-    "viewport": {"width": 1440, "height": 1200},
-    "locale": "sv-SE",
-    "timezone_id": "Europe/Stockholm",
-    "user_agent": (
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    ),
-}
-
-
-async def _new_browser_context(p):
-    browser = await p.chromium.launch(headless=True, args=BROWSER_ARGS)
-    ctx = await browser.new_context(**BROWSER_CONTEXT)
-    ctx.set_default_timeout(120_000)
-    return browser, ctx
-
-
+CALENDAR_STARTLIST_SELECTOR = "a[href*='/race/raceday/ts'][href*='/startlist']"
+STOCKHOLM_TZ = ZoneInfo("Europe/Stockholm")
 SWEDISH_MONTH = {
     "JANUARI": 1, "FEBRUARI": 2, "MARS": 3, "APRIL": 4, "MAJ": 5,
     "JUNI": 6, "JULI": 7, "AUGUSTI": 8, "SEPTEMBER": 9, "OKTOBER": 10,
@@ -42,19 +25,6 @@ SWEDISH_MONTH = {
 SWEDISH_MONTH_BY_NUMBER = {v: k.lower() for k, v in SWEDISH_MONTH.items()}
 CALENDAR_URL = "https://sportapp.travsport.se/race/calendar/race?year={year}&competition=SPORT&month={month:02d}"
 
-
-class TravsportRequestBlocked(RuntimeError):
-    pass
-
-
-async def _is_threat_protection_response(page, response_status: Optional[int]) -> bool:
-    if response_status == 403:
-        return True
-
-    try:
-        return (await page.title()).strip().lower() == "threat protection - request blocked"
-    except PlaywrightError:
-        return False
 
 def swedish_date_to_yyyymmdd(txt: str) -> str:
     p = (txt or "").strip().upper().split()
@@ -241,133 +211,96 @@ class StartRow:
     struken: bool
 
 
-async def scrape_startlist(url: str) -> List[StartRow]:
-    async with async_playwright() as p:
-        browser, ctx = await _new_browser_context(p)
-        page = await ctx.new_page()
-        response_status = None
+async def scrape_startlist(page, policy: ScrapePolicy, url: str) -> List[StartRow]:
+    await policy.goto(page, url)
+    await policy.wait_for_selector(page, ROW_SELECTOR, timeout=120_000)
+    await policy.wait_for_selector(page, LOPP_HEADER_SELECTOR, timeout=120_000)
 
-        try:
-            response = await page.goto(url, timeout=0, wait_until="domcontentloaded")
-            response_status = response.status if response else None
-        except PlaywrightError as exc:
-            await _log_startlist_page_diagnostics(page, url, "goto failed", response_status, exc)
-            await ctx.close()
-            await browser.close()
-            return []
+    texts = await _get_nav_texts(page)
+    raw_track, date_txt = _extract_track_and_date(texts)
+    if not raw_track or not date_txt:
+        await policy.check_page(page)
+        return []
 
-        if await _is_threat_protection_response(page, response_status):
-            await _log_startlist_page_diagnostics(page, url, "request blocked", response_status)
-            await ctx.close()
-            await browser.close()
-            raise TravsportRequestBlocked(
-                "Travsport blocked the request with HTTP 403. Stop retrying and try again later; "
-                "if the block persists, contact the site administrator and include the incident ID from the log."
-            )
+    bankod = track_to_bankod(raw_track)
+    startdatum = int(swedish_date_to_yyyymmdd(date_txt))
 
-        if response_status is not None and response_status >= 400:
-            await _log_startlist_page_diagnostics(page, url, "HTTP error", response_status)
-            await ctx.close()
-            await browser.close()
-            return []
+    out: List[StartRow] = []
+    lopp_headers = page.locator("//h2[starts-with(normalize-space(),'Lopp')]")
+    for i in range(await lopp_headers.count()):
+        header = lopp_headers.nth(i)
+        await header.scroll_into_view_if_needed()
 
-        try:
-            await page.wait_for_selector(ROW_SELECTOR, timeout=120_000)
-            await page.wait_for_selector(LOPP_HEADER_SELECTOR, timeout=120_000)
-        except PlaywrightError as exc:
-            await _log_startlist_page_diagnostics(page, url, "rows/header timeout", response_status, exc)
-            await ctx.close()
-            await browser.close()
-            return []
+        m = re.search(r"Lopp\s+(\d+)", normalize_cell_text(await header.inner_text()))
+        if not m:
+            continue
+        lopp_nr = int(m.group(1))
 
-        texts = await _get_nav_texts(page)
-        raw_track, date_txt = _extract_track_and_date(texts)
-        if not raw_track or not date_txt:
-            logging.info("Nav parse failed. texts=%s", texts)
-            await _log_startlist_page_diagnostics(page, url, "nav parse failed", response_status)
-            await ctx.close()
-            await browser.close()
-            return []
+        grid = header.locator("xpath=following::div[contains(@class,'MuiDataGrid-root')][1]")
+        rows = await grid.locator("div[role='row'][data-rowindex]").all()
+        if not rows:
+            logging.info("Lopp %s: inga rader, hoppar över", lopp_nr)
+            continue
 
-        bankod = track_to_bankod(raw_track)
-        startdatum = int(swedish_date_to_yyyymmdd(date_txt))
+        for row in rows:
+            cell = lambda f: row.locator(f"div[data-field='{f}']")
 
-        out: List[StartRow] = []
-        lopp_headers = page.locator("//h2[starts-with(normalize-space(),'Lopp')]")
-        for i in range(await lopp_headers.count()):
-            header = lopp_headers.nth(i)
-            await header.scroll_into_view_if_needed()  
+            # Startlista använder mobilehorse??????????????
+            horse_cell = cell("mobilehorse")
+            if await horse_cell.count() == 0:
+                horse_cell = cell("horse")
 
-            m = re.search(r"Lopp\s+(\d+)", normalize_cell_text(await header.inner_text()))
-            if not m:
-                continue
-            lopp_nr = int(m.group(1))
+            is_struken = (await horse_cell.locator("[class*='linethrough']").count()) > 0
 
-            grid = header.locator("xpath=following::div[contains(@class,'MuiDataGrid-root')][1]")  
-            rows = await grid.locator("div[role='row'][data-rowindex]").all()  
-            if not rows:
-                logging.info("Lopp %s: inga rader, hoppar över", lopp_nr)
-                continue
+            nr = None
+            try:
+                nr_txt = normalize_cell_text(await horse_cell.locator("div").first.inner_text())
+                nr_m = re.search(r"\d+", nr_txt)
+                if nr_m:
+                    nr = int(nr_m.group(0))
+            except (PlaywrightError, ValueError):
+                nr = None
 
-            for row in rows:
-                cell = lambda f: row.locator(f"div[data-field='{f}']")
+            if nr is None:
+                horse_text = normalize_cell_text(await horse_cell.inner_text())
+                nr_m = re.search(r"\b(\d{1,2})\b", horse_text)
+                if not nr_m:
+                    continue
+                nr = int(nr_m.group(1))
 
-                # Startlista använder mobilehorse??????????????
-                horse_cell = cell("mobilehorse")  
-                if await horse_cell.count() == 0:  
-                    horse_cell = cell("horse")  
+            namn_raw = ""
+            if await horse_cell.locator("span").count() > 0:
+                namn_raw = normalize_cell_text(await horse_cell.locator("span").first.inner_text())
+            if not namn_raw:
+                horse_text = normalize_cell_text(await horse_cell.inner_text())
+                namn_raw = re.sub(r"^\s*\d+\s*", "", horse_text).strip()
 
-                is_struken = (await horse_cell.locator("[class*='linethrough']").count()) > 0  
+            namn = normalize_startlista_name(namn_raw)
 
-                nr = None  
-                try:  
-                    nr_txt = normalize_cell_text(await horse_cell.locator("div").first.inner_text())  
-                    nr_m = re.search(r"\d+", nr_txt)  
-                    if nr_m:  
-                        nr = int(nr_m.group(0))  
-                except Exception:  
-                    nr = None  
+            kusk_raw = normalize_cell_text(await cell("driver").inner_text())
+            kusk = normalize_kusk(kusk_raw, 120)
 
-                if nr is None:  
-                    horse_text = normalize_cell_text(await horse_cell.inner_text())  
-                    nr_m = re.search(r"\b(\d{1,2})\b", horse_text)  
-                    if not nr_m:  
-                        continue  
-                    nr = int(nr_m.group(1))  
+            dist_raw = normalize_cell_text(await cell("trackName").inner_text())
+            distans, spar = parse_dist_spar(dist_raw)
 
-                namn_raw = ""  
-                if await horse_cell.locator("span").count() > 0:  
-                    namn_raw = normalize_cell_text(await horse_cell.locator("span").first.inner_text())  
-                if not namn_raw:  
-                    horse_text = normalize_cell_text(await horse_cell.inner_text())  
-                    namn_raw = re.sub(r"^\s*\d+\s*", "", horse_text).strip()  
+            out.append(StartRow(
+                startdatum=startdatum,
+                bankod=bankod,
+                lopp=lopp_nr,
+                nr=nr,
+                namn=namn,
+                spar=spar,
+                distans=distans,
+                kusk=kusk,
+                struken=is_struken,
+            ))
 
-                namn = normalize_startlista_name(namn_raw)
+    await policy.check_page(page)
+    return out
 
-                kusk_raw = normalize_cell_text(await cell("driver").inner_text())
-                kusk = normalize_kusk(kusk_raw, 120)
-
-                dist_raw = normalize_cell_text(await cell("trackName").inner_text())
-                distans, spar = parse_dist_spar(dist_raw)
-
-                out.append(StartRow(
-                    startdatum=startdatum,
-                    bankod=bankod,
-                    lopp=lopp_nr,
-                    nr=nr,
-                    namn=namn,
-                    spar=spar,
-                    distans=distans,
-                    kusk=kusk,
-                    struken=is_struken,
-                ))
-
-        await ctx.close()
-        await browser.close()
-        return out
 
 def _today_yyyymmdd() -> int:
-    d: date = timezone.localdate()
+    d: date = timezone.localdate(timezone=STOCKHOLM_TZ)
     return d.year * 10000 + d.month * 100 + d.day
 
 
@@ -392,222 +325,114 @@ def _startlist_ts_id_from_href(href: str) -> Optional[int]:
     return int(m.group(1)) if m else None
 
 
-def _short_log_text(value: str, limit: int = 600) -> str:
-    return re.sub(r"\s+", " ", value or "").strip()[:limit]
+async def find_startlist_ts_ids(page, policy: ScrapePolicy, first_day: date, last_day: date) -> List[int]:
+    """Use only published links for the requested dates; never guess IDs by default."""
+    month = first_day.replace(day=1)
+    ids = set()
+    while month <= last_day:
+        next_month = (month.replace(day=28) + timedelta(days=4)).replace(day=1)
+        from_day = max(first_day, month)
+        through_day = min(last_day, next_month - timedelta(days=1))
+        calendar_url = CALENDAR_URL.format(year=month.year, month=month.month)
+        cache_key = f"startlist-calendar:{from_day.isoformat()}:{through_day.isoformat()}"
+        cached_ids = policy.cached(cache_key, ttl_seconds=6 * 60 * 60)
+        if cached_ids:
+            ids.update(int(value) for value in cached_ids)
+            month = next_month
+            continue
 
-
-async def _log_startlist_page_diagnostics(page, url: str, reason: str, response_status=None, exc: Optional[Exception] = None) -> None:
-    try:
-        diagnostics = await page.evaluate(
-            """
-            () => {
-                const normalize = (value) => (value || "").replace(/\\s+/g, " ").trim();
-                const rows = Array.from(document.querySelectorAll("div[role='row'][data-rowindex]"));
-                const h2s = Array.from(document.querySelectorAll("h2"));
-                const grids = Array.from(document.querySelectorAll("div[class*='MuiDataGrid-root']"));
-                const dataFields = Array.from(document.querySelectorAll("div[data-field]"))
-                    .map((node) => node.getAttribute("data-field"))
-                    .filter(Boolean);
-
-                return {
-                    pageUrl: location.href,
-                    title: document.title,
-                    readyState: document.readyState,
-                    bodyText: normalize(document.body?.innerText || "").slice(0, 900),
-                    rowCount: rows.length,
-                    h2Count: h2s.length,
-                    h2Texts: h2s.map((node) => normalize(node.textContent).slice(0, 120)).slice(0, 12),
-                    gridCount: grids.length,
-                    dataFields: Array.from(new Set(dataFields)).slice(0, 30),
-                };
-            }
-            """
-        )
-    except Exception as diag_exc:
-        logging.warning("Startlista diagnostics failed for %s after %s: %s", url, reason, diag_exc)
-        return
-
-    logging.warning(
-        "Startlista diagnostics after %s: target_url=%s status=%s page_url=%s title=%r "
-        "ready_state=%s row_count=%s h2_count=%s grid_count=%s h2_texts=%s data_fields=%s body_sample=%r error=%s",
-        reason,
-        url,
-        response_status,
-        diagnostics.get("pageUrl"),
-        diagnostics.get("title"),
-        diagnostics.get("readyState"),
-        diagnostics.get("rowCount"),
-        diagnostics.get("h2Count"),
-        diagnostics.get("gridCount"),
-        diagnostics.get("h2Texts"),
-        diagnostics.get("dataFields"),
-        _short_log_text(diagnostics.get("bodyText", ""), 700),
-        exc,
-    )
-
-
-async def _log_calendar_lookup_diagnostics(page, target_day: date, month_name: str, reason: str) -> None:
-    try:
-        diagnostics = await page.evaluate(
-            """
-            ({ day, monthName }) => {
-                const normalize = (value) => (value || "")
-                    .normalize("NFKD")
-                    .replace(/\\s+/g, " ")
-                    .trim()
-                    .toLowerCase();
-                const datePattern = new RegExp(`(?:^|\\\\D)${day}\\\\s+${monthName}(?:\\\\b|$)`, "i");
-                const headers = Array.from(document.querySelectorAll("h2")).map((header, index) => ({
-                    index,
-                    text: normalize(header.textContent).slice(0, 160),
-                }));
-                const matchIndex = headers.findIndex((header) => datePattern.test(header.text));
-                const startlistLinks = Array.from(document.querySelectorAll("a[href*='/race/raceday/ts'][href*='/startlist']")).map((link) => ({
-                    text: normalize(link.textContent).slice(0, 120),
-                    href: link.getAttribute("href"),
-                }));
-                const raceLinks = Array.from(document.querySelectorAll("a[href*='/race/raceday/ts']")).map((link) => ({
-                    text: normalize(link.textContent).slice(0, 120),
-                    href: link.getAttribute("href"),
-                }));
-                const nearbyHeaders = matchIndex === -1
-                    ? headers.slice(0, 12)
-                    : headers.slice(Math.max(0, matchIndex - 3), matchIndex + 4);
-
-                return {
-                    pageUrl: location.href,
-                    title: document.title,
-                    bodyText: normalize(document.body?.innerText || "").slice(0, 600),
-                    h2Count: headers.length,
-                    matchIndex,
-                    nearbyHeaders,
-                    startlistLinkCount: startlistLinks.length,
-                    sampleStartlistLinks: startlistLinks.slice(0, 12),
-                    raceLinkCount: raceLinks.length,
-                    sampleRaceLinks: raceLinks.slice(0, 20),
-                };
-            }
-            """,
-            {"day": target_day.day, "monthName": month_name},
-        )
-    except Exception as exc:
-        logging.warning("Calendar diagnostics failed after %s: %s", reason, exc)
-        return
-
-    logging.warning(
-        "Calendar lookup diagnostics after %s: target=%s page_url=%s title=%r "
-        "h2_count=%s matching_header_index=%s startlist_link_count=%s race_link_count=%s "
-        "nearby_headers=%s sample_startlist_links=%s sample_race_links=%s body_sample=%r",
-        reason,
-        target_day.isoformat(),
-        diagnostics.get("pageUrl"),
-        diagnostics.get("title"),
-        diagnostics.get("h2Count"),
-        diagnostics.get("matchIndex"),
-        diagnostics.get("startlistLinkCount"),
-        diagnostics.get("raceLinkCount"),
-        diagnostics.get("nearbyHeaders"),
-        diagnostics.get("sampleStartlistLinks"),
-        diagnostics.get("sampleRaceLinks"),
-        _short_log_text(diagnostics.get("bodyText", "")),
-    )
-
-
-async def find_first_startlist_ts_id_for_date(target_day: date) -> Optional[int]:
-    calendar_url = CALENDAR_URL.format(year=target_day.year, month=target_day.month)
-    month_name = SWEDISH_MONTH_BY_NUMBER[target_day.month]
-    href = None
-
-    async with async_playwright() as p:
-        browser, ctx = await _new_browser_context(p)
-        page = await ctx.new_page()
-
+        found = set()
         try:
-            logging.info("Opening Startlista calendar URL: %s", calendar_url)
-            response = await page.goto(calendar_url, timeout=0, wait_until="domcontentloaded")
-            logging.info(
-                "Startlista calendar loaded: status=%s final_url=%s",
-                response.status if response else None,
-                page.url,
-            )
-
-            response_status = response.status if response else None
-            if await _is_threat_protection_response(page, response_status):
-                await _log_calendar_lookup_diagnostics(page, target_day, month_name, "request blocked")
-                raise TravsportRequestBlocked(
-                    "Travsport blocked the calendar request with HTTP 403. The scraper cannot safely discover "
-                    f"the ts-ID for {target_day.isoformat()} while the block is active. Try again later; if the "
-                    "block persists, contact the site administrator and include the incident ID from the log."
-                )
-
-            if response_status is not None and response_status >= 400:
-                await _log_calendar_lookup_diagnostics(page, target_day, month_name, f"HTTP {response_status}")
-                return None
-
-            await page.wait_for_selector("h2", timeout=120_000)
-
-            for _ in range(30):
-                href = await page.evaluate(
-                    """
-                    ({ day, monthName }) => {
-                        const normalize = (value) => (value || "")
-                            .normalize("NFKD")
-                            .replace(/\\s+/g, " ")
-                            .trim()
-                            .toLowerCase();
-                        const datePattern = new RegExp(`(?:^|\\\\D)${day}\\\\s+${monthName}(?:\\\\b|$)`, "i");
+            logging.info("Reading Startlista calendar for %s through %s", from_day, through_day)
+            await policy.goto(page, calendar_url)
+            await policy.wait_for_selector(page, "h2", timeout=120_000)
+            await policy.wait_for_selector(page, CALENDAR_STARTLIST_SELECTOR, timeout=120_000)
+            last_snapshot = None
+            settled_samples = 0
+            complete = False
+            saw_date_header = False
+            for _ in range(40):
+                policy.check()
+                result = await page.evaluate(
+                    r"""
+                    ({ firstDay, lastDay, monthName }) => {
+                        const normalize = (value) => (value || "").replace(/\s+/g, " ").trim().toLowerCase();
+                        const pattern = new RegExp(`(?:^|\\D)(\\d{1,2})\\s+${monthName}(?:\\b|$)`, "i");
                         const headers = Array.from(document.querySelectorAll("h2"));
-                        const index = headers.findIndex((header) => datePattern.test(normalize(header.textContent)));
-                        if (index === -1) {
-                            return null;
-                        }
-
-                        const header = headers[index];
-                        const nextHeader = headers[index + 1] || null;
                         const links = Array.from(document.querySelectorAll("a[href*='/race/raceday/ts'][href*='/startlist']"));
                         const before = (left, right) => Boolean(left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING);
-
-                        for (const link of links) {
-                            if (!before(header, link)) {
-                                continue;
+                        const hrefs = [];
+                        let maxDay = 0;
+                        for (let index = 0; index < headers.length; index++) {
+                            const match = normalize(headers[index].textContent).match(pattern);
+                            if (!match) continue;
+                            const day = Number(match[1]);
+                            maxDay = Math.max(maxDay, day);
+                            if (day < firstDay || day > lastDay) continue;
+                            const nextHeader = headers[index + 1] || null;
+                            for (const link of links) {
+                                if (before(headers[index], link) && (!nextHeader || before(link, nextHeader))) {
+                                    hrefs.push(link.getAttribute("href"));
+                                }
                             }
-                            if (nextHeader && !before(link, nextHeader)) {
-                                continue;
-                            }
-                            return link.getAttribute("href");
                         }
-
-                        return null;
+                        const scroller = document.scrollingElement || document.documentElement;
+                        const loading = Array.from(document.querySelectorAll(
+                            "[role='progressbar'], [aria-busy='true'], .MuiCircularProgress-root, .MuiLinearProgress-root"
+                        )).some((element) => element.getClientRects().length > 0 &&
+                            window.getComputedStyle(element).visibility !== "hidden");
+                        return {
+                            hrefs,
+                            maxDay,
+                            loading,
+                            atBottom: scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 4,
+                            position: `${scroller.scrollTop}:${scroller.scrollHeight}:${scroller.clientHeight}`,
+                        };
                     }
                     """,
-                    {"day": target_day.day, "monthName": month_name},
+                    {"firstDay": from_day.day, "lastDay": through_day.day,
+                     "monthName": SWEDISH_MONTH_BY_NUMBER[month.month]},
                 )
-                if href:
+                for href in result["hrefs"]:
+                    ts_id = _startlist_ts_id_from_href(href)
+                    if ts_id is not None:
+                        found.add(ts_id)
+                saw_date_header = saw_date_header or result["maxDay"] > 0
+                # Date headings can render before their links. Only accept three
+                # settled samples at the bottom with no visible loading indicator.
+                snapshot = (result["position"], tuple(sorted(found)))
+                if result["atBottom"] and not result["loading"]:
+                    settled_samples = settled_samples + 1 if snapshot == last_snapshot else 1
+                else:
+                    settled_samples = 0
+                if settled_samples >= 3:
+                    complete = True
                     break
-                await page.mouse.wheel(0, 2500)
-                await page.wait_for_timeout(250)
+                last_snapshot = snapshot
+                if not result["atBottom"]:
+                    await page.mouse.wheel(0, 1800)
+                await asyncio.sleep(random.uniform(policy.request_max + 1, policy.request_max + 3))
+            await policy.check_page(page)
+        except ScrapeStopped:
+            raise
+        except Exception as exc:
+            logging.warning("Calendar lookup failed (%s).", type(exc).__name__)
+            await policy.failure(page, calendar_url, "calendar lookup failed")
+            month = next_month
+            continue
+        if not complete:
+            await policy.failure(page, calendar_url, "calendar did not finish loading within the discovery limit")
+        elif not saw_date_header:
+            await policy.failure(page, calendar_url, "calendar has no recognizable date headers")
+        elif not found:
+            await policy.failure(page, calendar_url, "calendar has no startlist links for the requested dates")
+        else:
+            policy.remember(cache_key, sorted(found))
+            policy.success(calendar_url)
+            ids.update(found)
+        month = next_month
+    return sorted(ids)
 
-            if not href:
-                await _log_calendar_lookup_diagnostics(page, target_day, month_name, "no Startlista link found")
-
-        except PlaywrightError as exc:
-            logging.exception(
-                "Startlista calendar lookup failed with PlaywrightError for target=%s url=%s: %s",
-                target_day.isoformat(),
-                calendar_url,
-                exc,
-            )
-            await _log_calendar_lookup_diagnostics(page, target_day, month_name, "PlaywrightError")
-            href = None
-        finally:
-            await ctx.close()
-            await browser.close()
-
-    if not href:
-        return None
-
-    full_href = urljoin("https://sportapp.travsport.se", href)
-    return _startlist_ts_id_from_href(full_href)
 
 def upsert_resultat_from_startrow(r: StartRow):
     namn_clean = r.namn
@@ -660,126 +485,114 @@ def upsert_resultat_from_startrow(r: StartRow):
 
 
 class Command(BaseCommand):
-    help = "Scrape Startlista from yesterday's calendar ts-ID, or from manual ts-ID options"
-    
+    help = "Scrape linked Startlista pages from the calendar with shared pacing and caching."
+
     START_ID = 616_280
-    END_ID   = 616_330
+    END_ID = 616_330
 
     def add_arguments(self, parser):
         parser.add_argument(
-            "--manual-ids",
-            action="store_true",
-            help="Use the hard-coded START_ID and END_ID values in this command.",
+            "--manual-ids", action="store_true",
+            help="Explicitly scan the hard-coded START_ID and END_ID range (subject to request limits).",
+        )
+        parser.add_argument("--start-id", type=_parse_ts_id, help="Manual first raceday ts-ID, for example 616_280.")
+        parser.add_argument("--end-id", type=_parse_ts_id, help="Manual last raceday ts-ID, for example 616_300.")
+        parser.add_argument(
+            "--ids-after-start", type=int, default=None,
+            help="Explicitly scan this many IDs after the first linked/manual ID. Manual --start-id alone processes one page.",
         )
         parser.add_argument(
-            "--start-id",
-            type=_parse_ts_id,
-            help="Manual first raceday ts-ID, for example 616_280.",
+            "--calendar-date", type=_parse_iso_date,
+            help="Read linked startlists for this date and the following 5 days; defaults to yesterday. Use YYYY-MM-DD.",
         )
-        parser.add_argument(
-            "--end-id",
-            type=_parse_ts_id,
-            help="Manual last raceday ts-ID, for example 616_300.",
-        )
-        parser.add_argument(
-            "--ids-after-start",
-            type=int,
-            default=20,
-            help="How many IDs after the auto/manual start ID to include when END_ID is not provided.",
-        )
-        parser.add_argument(
-            "--calendar-date",
-            type=_parse_iso_date,
-            help="Find the first Startlista ts-ID from this date instead of yesterday. Use YYYY-MM-DD.",
-        )
-
-    def _resolve_id_range(self, opts):
-        ids_after_start = opts["ids_after_start"]
-        if ids_after_start < 0:
-            raise CommandError("--ids-after-start must be 0 or greater.")
-
-        start_id = opts.get("start_id")
-        end_id = opts.get("end_id")
-
-        if start_id is not None:
-            resolved_end_id = end_id if end_id is not None else start_id + ids_after_start
-            return start_id, resolved_end_id, "manual command-line IDs"
-
-        if end_id is not None:
-            raise CommandError("--end-id requires --start-id.")
-
-        if opts.get("manual_ids"):
-            return self.START_ID, self.END_ID, "hard-coded START_ID/END_ID"
-
-        target_day = opts.get("calendar_date") or (timezone.localdate() - timedelta(days=1))
-        logging.info("Finding first Startlista ts-ID for %s", target_day.isoformat())
-        try:
-            resolved_start_id = asyncio.run(find_first_startlist_ts_id_for_date(target_day))
-        except TravsportRequestBlocked as exc:
-            raise CommandError(str(exc)) from exc
-
-        if resolved_start_id is None:
-            raise CommandError(f"Could not find a Startlista link for {target_day.isoformat()} in the race calendar.")
-
-        return resolved_start_id, resolved_start_id + ids_after_start, f"calendar date {target_day.isoformat()}"
 
     def handle(self, *args, **kwargs):
+        count = kwargs.get("ids_after_start")
+        if count is not None and count < 0:
+            raise CommandError("--ids-after-start must be 0 or greater.")
+        start_id = kwargs.get("start_id")
+        end_id = kwargs.get("end_id")
+        if end_id is not None and start_id is None:
+            raise CommandError("--end-id requires --start-id.")
+        if start_id is not None and start_id <= 0:
+            raise CommandError("--start-id must be positive.")
+        if start_id is not None and end_id is not None and end_id < start_id:
+            raise CommandError("--end-id must be greater than or equal to --start-id.")
+        with ScrapePolicy() as policy:
+            asyncio.run(self._scrape(policy, kwargs))
+
+    async def _resolve_ids(self, page, policy, opts):
+        count = opts.get("ids_after_start")
+        start_id = opts.get("start_id")
+        if start_id is not None:
+            end_id = opts.get("end_id")
+            if end_id is None:
+                end_id = start_id + (0 if count is None else count)
+            return range(start_id, end_id + 1)
+        if opts.get("manual_ids"):
+            return range(self.START_ID, self.END_ID + 1)
+
+        target_day = opts.get("calendar_date") or (
+            timezone.localdate(timezone=STOCKHOLM_TZ) - timedelta(days=1)
+        )
+        last_day = target_day if count is not None else target_day + timedelta(days=5)
+        linked_ids = await find_startlist_ts_ids(page, policy, target_day, last_day)
+        if count is not None:
+            if not linked_ids:
+                raise CommandError(f"Could not find a Startlista link for {target_day.isoformat()} in the race calendar.")
+            return range(linked_ids[0], linked_ids[0] + count + 1)
+        return linked_ids
+
+    @transaction.atomic
+    def _save_rows(self, rows, today_int):
+        resultat_count = 0
+        for row in rows:
+            StartList.objects.update_or_create(
+                startdatum=row.startdatum, bankod=row.bankod, lopp=row.lopp, nr=row.nr,
+                defaults=dict(
+                    namn=row.namn, spar=row.spar, distans=row.distans,
+                    kusk=normalize_kusk(row.kusk, 120),
+                ),
+            )
+            if row.startdatum >= today_int:
+                upsert_resultat_from_startrow(row)
+                resultat_count += 1
+        return resultat_count
+
+    async def _scrape(self, policy, opts):
         base = "https://sportapp.travsport.se/race/raceday/ts{}/startlist/all"
         total = 0
         total_resultat = 0
+        skipped = 0
         today_int = _today_yyyymmdd()
-
-        start_id, end_id, source = self._resolve_id_range(kwargs)
-        if end_id < start_id:
-            raise CommandError("END_ID must be greater than or equal to START_ID.")
-
-        logging.info(
-            "Using %s range: ts%s through ts%s",
-            source,
-            _format_ts_id(start_id),
-            _format_ts_id(end_id),
-        )
-
-        for ts in range(start_id, end_id + 1):
-            url = base.format(ts)
-            logging.info("Scraping %s", url)
-
-            try:
-                rows = asyncio.run(scrape_startlist(url))
-            except TravsportRequestBlocked as exc:
-                raise CommandError(str(exc)) from exc
-            except Exception as exc:
-                logging.warning("  failed: %s", exc)
-                continue
-
-            if not rows:
-                logging.info("  no rows")
-                continue
-
-            for r in rows:
-                StartList.objects.update_or_create(
-                    startdatum=r.startdatum,
-                    bankod=r.bankod,
-                    lopp=r.lopp,
-                    nr=r.nr,
-                    defaults=dict(
-                        namn=r.namn,
-                        spar=r.spar,
-                        distans=r.distans,
-                        kusk=normalize_kusk(r.kusk, 120),
-                    ),
-                )
-
-                if r.startdatum >= today_int:
-                    upsert_resultat_from_startrow(r)
-                    total_resultat += 1
-
-            total += len(rows)
-            logging.info(
-                "  inserted/updated %d startlista rows (+%d resultat upserts, today=%d)",
-                len(rows), total_resultat, today_int
-            )
-
+        async with policy.browser() as page:
+            ids = await self._resolve_ids(page, policy, opts)
+            logging.info("Selected %d startlist pages.", len(ids))
+            for ts_id in ids:
+                policy.check()
+                url = base.format(ts_id)
+                if policy.is_recent(url, ttl_seconds=6 * 60 * 60):
+                    skipped += 1
+                    continue
+                logging.info("Scraping %s", url)
+                try:
+                    rows = await scrape_startlist(page, policy, url)
+                except ScrapeStopped:
+                    raise
+                except Exception as exc:
+                    logging.warning("Startlist failed (%s).", type(exc).__name__)
+                    await policy.failure(page, url, "startlist navigation or parsing failed")
+                    continue
+                if not rows:
+                    await policy.failure(page, url, "startlist had no usable rows")
+                    continue
+                # Database errors stop the command instead of fetching further pages.
+                resultat_count = await asyncio.to_thread(self._save_rows, rows, today_int)
+                policy.success(url)
+                total += len(rows)
+                total_resultat += resultat_count
+                logging.info("Saved %d startlista rows and %d resultat upserts.", len(rows), resultat_count)
         self.stdout.write(self.style.SUCCESS(
-            f"Done. {total} startlista rows processed. {total_resultat} resultat upserts (today/future only)."
+            f"Done. {total} startlista rows processed. {total_resultat} resultat upserts "
+            f"(today/future only). {skipped} recently processed pages skipped."
         ))

@@ -1,5 +1,16 @@
 from django.db import models
 
+
+class CrawlState(models.Model):
+    """Shared limits, cooldowns and checkpoints across all scraper machines."""
+
+    key = models.CharField(max_length=32, primary_key=True)
+    data = models.JSONField(default=dict)
+
+    class Meta:
+        db_table = "scraper_crawl_state"
+
+
 class HorseResult(models.Model):
     id = models.BigAutoField(primary_key=True)
 
