@@ -17,6 +17,7 @@ from scraper.models import HorseResult
 from scraper.polite import ScrapePolicy, ScrapeStopped
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
 
 
 SWEDISH_MONTH = {
@@ -80,14 +81,14 @@ async def _extract_banforhallande_value_from_section(section) -> str:
             sib = label.first.locator("xpath=following-sibling::span[1]")
             if await sib.count() > 0:
                 return normalize_cell_text(await sib.first.inner_text())
-    except Exception:
-        pass
+    except PlaywrightError as exc:
+        logger.warning("Could not read track conditions: %s", exc)
     return ""
 
 
-dist_slash_re = re.compile(r"^\s*(\d{1,2})\s*/\s*(\d{3,4})\s*([a-zA-Z() \u00a0]*)\s*$", re.I)
-dist_colon_re = re.compile(r"^\s*(\d{3,4})\s*:\s*(\d{1,2})\s*$", re.I)
-dist_only_re = re.compile(r"^\s*(\d{3,4})\s*(?:m)?\s*$", re.I)
+dist_slash_re = re.compile(r"^\s*(\d{1,2})\s*/\s*(\d{3,4})\s*([a-zA-Z() \u00a0]*)\s*$", re.IGNORECASE)
+dist_colon_re = re.compile(r"^\s*(\d{3,4})\s*:\s*(\d{1,2})\s*$", re.IGNORECASE)
+dist_only_re = re.compile(r"^\s*(\d{3,4})\s*(?:m)?\s*$", re.IGNORECASE)
 
 def parse_dist_spar(txt: str):
     t = normalize_cell_text(txt)
@@ -113,7 +114,7 @@ def parse_dist_spar(txt: str):
 
     return None, None, ""
 
-placering_with_r = re.compile(r"^(\d{1,2})r$", re.I)
+placering_with_r = re.compile(r"^(\d{1,2})r$", re.IGNORECASE)
 
 def map_placering_value(raw: str):
     t = normalize_cell_text(raw).lower()
@@ -288,9 +289,9 @@ def track_to_bankod(name: str) -> str:
 
 
 MONTHS_PATTERN = "|".join(SWEDISH_MONTH.keys())  
-DATE_PART_RX = re.compile(rf"\b(\d{{1,2}})\s+({MONTHS_PATTERN})\s+(\d{{4}})\b", re.I)  
+DATE_PART_RX = re.compile(rf"\b(\d{{1,2}})\s+({MONTHS_PATTERN})\s+(\d{{4}})\b", re.IGNORECASE)
 WEEKDAYS = ("MÅNDAG","TISDAG","ONSDAG","TORSDAG","FREDAG","LÖRDAG","SÖNDAG")  
-WEEKDAYS_RX = re.compile(rf"\b(?:{'|'.join(WEEKDAYS)})\b", re.I)  
+WEEKDAYS_RX = re.compile(rf"\b(?:{'|'.join(WEEKDAYS)})\b", re.IGNORECASE)
 
 async def _get_nav_texts(page):  
     for sel in ("[class*='RaceDayNavigator'] span", "header span"):  
@@ -369,18 +370,18 @@ class Row:
 
 async def _extract_pris_text_from_section(section) -> str:
     try:
-        loc = section.get_by_text(re.compile(r"\bPris\s*:", re.I))
+        loc = section.get_by_text(re.compile(r"\bPris\s*:", re.IGNORECASE))
         if await loc.count() > 0:
             return normalize_cell_text(await loc.first.inner_text())
-    except Exception:
-        pass
+    except PlaywrightError as exc:
+        logger.debug("Prize text lookup failed; trying fallback selector: %s", exc)
 
     try:
         loc = section.locator("xpath=.//*[contains(., 'Pris:') or contains(., 'PRIS:')]")
         if await loc.count() > 0:
             return normalize_cell_text(await loc.first.inner_text())
-    except Exception:
-        pass
+    except PlaywrightError as exc:
+        logger.warning("Could not read prize text with fallback selector: %s", exc)
 
     return ""
 
@@ -400,7 +401,7 @@ async def scrape_page(page, url: str, policy: ScrapePolicy) -> list[Row]:
     texts = await _get_nav_texts(page)  
     track_raw, date_txt = _extract_track_and_date(texts)  
     if not track_raw or not date_txt:  
-        logging.info("Nav parse failed. texts=%s", texts)  
+        logger.info("Nav parse failed. texts=%s", texts)
         return []  
 
     bankod = track_to_bankod(track_raw)  
@@ -436,7 +437,8 @@ async def scrape_page(page, url: str, policy: ScrapePolicy) -> list[Row]:
 
         for row in rows:
             policy.check()
-            cell = lambda f: row.locator(f"div[data-field='{f}']")
+            def cell(field, current_row=row):
+                return current_row.locator(f"div[data-field='{field}']")
 
             nr_txt = normalize_cell_text(await cell("horse").locator("div").first.inner_text())
             nr_m = re.search(r"\d+", nr_txt)
@@ -464,7 +466,8 @@ async def scrape_page(page, url: str, policy: ScrapePolicy) -> list[Row]:
                     """
                 )
                 kusk = normalize_kusk(kusk_raw)
-            except Exception:
+            except PlaywrightError as exc:
+                logger.warning("Could not read driver for race %s, horse %s: %s", lopp, nr, exc)
                 kusk = ""
 
             placetxt = normalize_cell_text(await cell("placementDisplay").inner_text())
@@ -484,7 +487,8 @@ async def scrape_page(page, url: str, policy: ScrapePolicy) -> list[Row]:
                     mm = re.search(r"\d+", odds_txt)
                     if mm:
                         odds = int(mm.group(0))
-            except Exception:
+            except (PlaywrightError, ValueError) as exc:
+                logger.warning("Could not read odds for race %s, horse %s: %s", lopp, nr, exc)
                 odds = None
 
             data.append(Row(
@@ -524,22 +528,22 @@ def write_rows_to_db(rows: list[Row]) -> int:
                 bankod=r.bankod,
                 lopp=r.lopp,
                 namn=namn_clean,
-                defaults=dict(
-                    nr=r.nr,
-                    distans=r.distans,
-                    spar=r.spar,
-                    placering=r.placering,
-                    tid=r.tid,
-                    startmetod=r.startmetod,
-                    galopp=r.galopp,
-                    underlag=(r.underlag or ""),
-                    kusk=normalize_kusk(r.kusk),
-                    pris=r.pris,
-                    odds=(r.odds if (r.odds not in (None, 999)) else 999),
-                ),
+                defaults={
+                    "nr": r.nr,
+                    "distans": r.distans,
+                    "spar": r.spar,
+                    "placering": r.placering,
+                    "tid": r.tid,
+                    "startmetod": r.startmetod,
+                    "galopp": r.galopp,
+                    "underlag": (r.underlag or ""),
+                    "kusk": normalize_kusk(r.kusk),
+                    "pris": r.pris,
+                    "odds": (r.odds if (r.odds not in (None, 999)) else 999),
+                },
             )
-        except IntegrityError as e:
-            logging.exception("DB IntegrityError for (%s,%s,L%s,%s): %s", r.datum, r.bankod, r.lopp, namn_clean, e)
+        except IntegrityError:
+            logger.exception("DB IntegrityError for (%s,%s,L%s,%s)", r.datum, r.bankod, r.lopp, namn_clean)
             raise
 
         if created:
@@ -594,10 +598,13 @@ def write_rows_to_db(rows: list[Row]) -> int:
 
         incoming_odds = r.odds
         existing_odds = obj.odds if obj.odds is not None else 999
-        if incoming_odds not in (None, 999) and existing_odds == 999:
-            if obj.odds != int(incoming_odds):
-                obj.odds = int(incoming_odds)
-                changed_fields.append("odds")
+        if (
+            incoming_odds not in (None, 999)
+            and existing_odds == 999
+            and obj.odds != int(incoming_odds)
+        ):
+            obj.odds = int(incoming_odds)
+            changed_fields.append("odds")
 
         if changed_fields:
             obj.save(update_fields=changed_fields)
@@ -605,7 +612,7 @@ def write_rows_to_db(rows: list[Row]) -> int:
         else:
             unchanged_n += 1
 
-    logging.info("  db_created=%d db_updated=%d db_unchanged=%d", created_n, updated_n, unchanged_n)
+    logger.info("  db_created=%d db_updated=%d db_unchanged=%d", created_n, updated_n, unchanged_n)
     return created_n + updated_n
 
 
@@ -640,7 +647,7 @@ async def _calendar_results_for_month(page, policy: ScrapePolicy, month: date):
     cache_key = f"results-calendar:{month.year}-{month.month:02d}"
     cached = policy.cached(cache_key, CALENDAR_CACHE_SECONDS)
     if cached is not None:
-        logging.info("Using cached Resultat calendar for %s", month.strftime("%Y-%m"))
+        logger.info("Using cached Resultat calendar for %s", month.strftime("%Y-%m"))
         return cached
 
     calendar_url = CALENDAR_URL.format(year=month.year, month=month.month)
@@ -648,7 +655,7 @@ async def _calendar_results_for_month(page, policy: ScrapePolicy, month: date):
     results = {}
     complete = False
     try:
-        logging.info("Opening Resultat calendar URL: %s", calendar_url)
+        logger.info("Opening Resultat calendar URL: %s", calendar_url)
         await policy.goto(page, calendar_url)
         await policy.wait_for_selector(page, "h2", timeout=120_000)
         await policy.wait_for_selector(
@@ -735,7 +742,7 @@ async def _calendar_results_for_month(page, policy: ScrapePolicy, month: date):
         return {}
 
     if not any(results.values()):
-        logging.warning("No usable Resultat calendar links found for %s.", month.strftime("%Y-%m"))
+        logger.warning("No usable Resultat calendar links found for %s.", month.strftime("%Y-%m"))
         await policy.failure(page, calendar_url, "Resultat calendar contained no usable result links")
         return {}
 
@@ -769,7 +776,7 @@ async def run_results(policy: ScrapePolicy, manual_range, first_day, last_day, i
         else:
             ts_ids = await _discover_result_ids(page, policy, first_day, last_day)
             if not ts_ids:
-                logging.info("No Resultat links found between %s and %s.", first_day, last_day)
+                logger.info("No Resultat links found between %s and %s.", first_day, last_day)
                 return 0
             if ids_after_start is not None:
                 start_id = ts_ids[0]
@@ -779,14 +786,14 @@ async def run_results(policy: ScrapePolicy, manual_range, first_day, last_day, i
             policy.check()
             url = RESULTS_URL.format(ts_id)
             if policy.is_recent(url, RESULTS_CACHE_SECONDS):
-                logging.info("Skipping %s; successfully processed within the last 24 hours.", url)
+                logger.info("Skipping %s; successfully processed within the last 24 hours.", url)
                 continue
-            logging.info("Scraping %s", url)
+            logger.info("Scraping %s", url)
             try:
                 rows = await scrape_page(page, url, policy)
             except ScrapeStopped:
                 raise
-            except Exception as exc:
+            except (PlaywrightError, ValueError) as exc:
                 await policy.failure(page, url, f"Result parsing failed: {exc}")
                 continue
             if not rows:
@@ -868,9 +875,9 @@ class Command(BaseCommand):
         first_day = opts.get("calendar_date") or (today - timedelta(days=days_back))
         last_day = first_day if opts.get("calendar_date") or ids_after_start is not None else today
         if manual_range is not None:
-            logging.info("Using manual range: ts%s through ts%s", *map(_format_ts_id, manual_range))
+            logger.info("Using manual range: ts%s through ts%s", *map(_format_ts_id, manual_range))
         else:
-            logging.info("Finding Resultat links from %s through %s.", first_day, last_day)
+            logger.info("Finding Resultat links from %s through %s.", first_day, last_day)
 
         with ScrapePolicy() as policy:
             total = asyncio.run(run_results(policy, manual_range, first_day, last_day, ids_after_start))

@@ -16,6 +16,7 @@ from scraper.models import HorseResult, StartList
 from scraper.polite import ScrapePolicy, ScrapeStopped
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
 
 ROW_SELECTOR = "div[role='row'][data-rowindex]"
 LOPP_HEADER_SELECTOR = "xpath=//h2[starts-with(normalize-space(),'Lopp')]"
@@ -66,7 +67,7 @@ def normalize_kusk(kusk: str, max_len: int) -> str:
     return trim_to_max(cleaned, max_len)
 
 
-dist_re = re.compile(r"\s*(\d+)\s*/\s*([\d,]+)", re.I)
+dist_re = re.compile(r"\s*(\d+)\s*/\s*([\d,]+)", re.IGNORECASE)
 
 def parse_dist_spar(txt: str):
     t = normalize_cell_text(txt)
@@ -109,7 +110,7 @@ def track_to_bankod(n: str) -> str:
         return hit2  
 
     fallback = n[:2].title()  
-    logging.warning("Unknown track name=%r (ascii=%r). Using fallback bankod=%r", n, n_ascii, fallback)  
+    logger.warning("Unknown track name=%r (ascii=%r). Using fallback bankod=%r", n, n_ascii, fallback)
     return fallback  
 
 NAV_PREFIXES = (  
@@ -139,9 +140,9 @@ def _strip_nav_prefixes(up: str) -> str:
 
 
 MONTHS_PATTERN = "|".join(SWEDISH_MONTH.keys())  
-DATE_PART_RX = re.compile(rf"\b(\d{{1,2}})\s+({MONTHS_PATTERN})\s+(\d{{4}})\b", re.I)  
+DATE_PART_RX = re.compile(rf"\b(\d{{1,2}})\s+({MONTHS_PATTERN})\s+(\d{{4}})\b", re.IGNORECASE)
 WEEKDAYS = ("MÅNDAG","TISDAG","ONSDAG","TORSDAG","FREDAG","LÖRDAG","SÖNDAG")  
-WEEKDAYS_RX = re.compile(rf"\b(?:{'|'.join(WEEKDAYS)})\b", re.I)  
+WEEKDAYS_RX = re.compile(rf"\b(?:{'|'.join(WEEKDAYS)})\b", re.IGNORECASE)
 
 async def _get_nav_texts(page):  
     for sel in ("[class*='RaceDayNavigator'] span", "header span"):  
@@ -243,11 +244,12 @@ async def scrape_startlist(page, policy: ScrapePolicy, url: str) -> list[StartRo
         grid = header.locator("xpath=following::div[contains(@class,'MuiDataGrid-root')][1]")
         rows = await grid.locator("div[role='row'][data-rowindex]").all()
         if not rows:
-            logging.info("Lopp %s: inga rader, hoppar över", lopp_nr)
+            logger.info("Lopp %s: inga rader, hoppar över", lopp_nr)
             continue
 
         for row in rows:
-            cell = lambda f: row.locator(f"div[data-field='{f}']")
+            def cell(field, current_row=row):
+                return current_row.locator(f"div[data-field='{field}']")
 
             # Startlista använder mobilehorse??????????????
             horse_cell = cell("mobilehorse")
@@ -347,7 +349,7 @@ async def find_startlist_ts_ids(page, policy: ScrapePolicy, first_day: date, las
 
         found = set()
         try:
-            logging.info("Reading Startlista calendar for %s through %s", from_day, through_day)
+            logger.info("Reading Startlista calendar for %s through %s", from_day, through_day)
             await policy.goto(page, calendar_url)
             await policy.wait_for_selector(page, "h2", timeout=120_000)
             await policy.wait_for_selector(page, CALENDAR_STARTLIST_SELECTOR, timeout=120_000)
@@ -419,8 +421,8 @@ async def find_startlist_ts_ids(page, policy: ScrapePolicy, first_day: date, las
             await policy.check_page(page)
         except ScrapeStopped:
             raise
-        except Exception as exc:
-            logging.warning("Calendar lookup failed (%s).", type(exc).__name__)
+        except (PlaywrightError, ValueError) as exc:
+            logger.warning("Calendar lookup failed (%s).", type(exc).__name__)
             await policy.failure(page, calendar_url, "calendar lookup failed")
             month = next_month
             continue
@@ -449,13 +451,13 @@ def upsert_resultat_from_startrow(r: StartRow):
         bankod=r.bankod,
         lopp=r.lopp,
         namn=namn_clean,
-        defaults=dict(
-            nr=r.nr,
-            distans=r.distans,
-            spar=r.spar,
-            kusk=kusk_res,
-            placering=desired_placering,
-        ),
+        defaults={
+            "nr": r.nr,
+            "distans": r.distans,
+            "spar": r.spar,
+            "kusk": kusk_res,
+            "placering": desired_placering,
+        },
     )
 
     if created:
@@ -479,10 +481,9 @@ def upsert_resultat_from_startrow(r: StartRow):
         obj.kusk = kusk_res
         changed_fields.append("kusk")
 
-    if obj.placering is None or obj.placering in (0, 99):
-        if obj.placering != desired_placering:
-            obj.placering = desired_placering
-            changed_fields.append("placering")
+    if (obj.placering is None or obj.placering in (0, 99)) and obj.placering != desired_placering:
+        obj.placering = desired_placering
+        changed_fields.append("placering")
 
     if changed_fields:
         obj.save(update_fields=changed_fields)
@@ -553,10 +554,12 @@ class Command(BaseCommand):
         for row in rows:
             StartList.objects.update_or_create(
                 startdatum=row.startdatum, bankod=row.bankod, lopp=row.lopp, nr=row.nr,
-                defaults=dict(
-                    namn=row.namn, spar=row.spar, distans=row.distans,
-                    kusk=normalize_kusk(row.kusk, 120),
-                ),
+                defaults={
+                    "namn": row.namn,
+                    "spar": row.spar,
+                    "distans": row.distans,
+                    "kusk": normalize_kusk(row.kusk, 120),
+                },
             )
             if row.startdatum >= today_int:
                 upsert_resultat_from_startrow(row)
@@ -571,20 +574,20 @@ class Command(BaseCommand):
         today_int = _today_yyyymmdd()
         async with policy.browser() as page:
             ids = await self._resolve_ids(page, policy, opts)
-            logging.info("Selected %d startlist pages.", len(ids))
+            logger.info("Selected %d startlist pages.", len(ids))
             for ts_id in ids:
                 policy.check()
                 url = base.format(ts_id)
                 if policy.is_recent(url, ttl_seconds=6 * 60 * 60):
                     skipped += 1
                     continue
-                logging.info("Scraping %s", url)
+                logger.info("Scraping %s", url)
                 try:
                     rows = await scrape_startlist(page, policy, url)
                 except ScrapeStopped:
                     raise
-                except Exception as exc:
-                    logging.warning("Startlist failed (%s).", type(exc).__name__)
+                except (PlaywrightError, ValueError) as exc:
+                    logger.warning("Startlist failed (%s).", type(exc).__name__)
                     await policy.failure(page, url, "startlist navigation or parsing failed")
                     continue
                 if not rows:
@@ -595,7 +598,7 @@ class Command(BaseCommand):
                 policy.success(url)
                 total += len(rows)
                 total_resultat += resultat_count
-                logging.info("Saved %d startlista rows and %d resultat upserts.", len(rows), resultat_count)
+                logger.info("Saved %d startlista rows and %d resultat upserts.", len(rows), resultat_count)
         self.stdout.write(self.style.SUCCESS(
             f"Done. {total} startlista rows processed. {total_resultat} resultat upserts "
             f"(today/future only). {skipped} recently processed pages skipped."

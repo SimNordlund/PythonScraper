@@ -105,7 +105,7 @@ async def scrape_proposition_page(page, policy: ScrapePolicy, url: str) -> list[
     cand = page.locator("xpath=//*[contains(normalize-space(.), 'Prop.')]")
     for i in range(min(await cand.count(), 50)):
         txt = (await cand.nth(i).inner_text()).strip()
-        m = re.search(r"Prop\.\s*(\d+)", txt, flags=re.I)
+        m = re.search(r"Prop\.\s*(\d+)", txt, flags=re.IGNORECASE)
         if m:
             prop_num = int(m.group(1))
             break
