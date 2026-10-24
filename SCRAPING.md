@@ -76,6 +76,16 @@ particular, results for a day still in progress are refreshed on a later run.
 Only successfully parsed pages saved to the database are marked completed;
 failed/empty pages and incomplete discovery scans are not cached as successes.
 
+Failed or incomplete calendar discovery exits with an error instead of reporting
+zero rows as a successful run. A fully read, recognized calendar with no links
+for the requested dates is a valid empty result. If individual race/proposition
+pages fail while the remaining pages are processed, the command still exits
+with an error at the end and lists failed URLs. Successfully saved pages remain
+saved. A later successful page cannot hide an earlier page's failure.
+
+PowerShell date loops should stop when `$LASTEXITCODE -ne 0`. `scrape_daily`
+also stops when either command fails, without announcing that both completed.
+
 ## Commands
 
 ```powershell

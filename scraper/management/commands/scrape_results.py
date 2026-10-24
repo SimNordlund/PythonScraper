@@ -735,16 +735,25 @@ async def _calendar_results_for_month(page, policy: ScrapePolicy, month: date):
         raise
     except PlaywrightError as exc:
         await policy.failure(page, calendar_url, f"Resultat calendar failed: {exc}")
-        return {}
+        raise CommandError(
+            f"Could not read the Resultat calendar for {month:%Y-%m}. "
+            "The requested dates were not fully processed."
+        ) from exc
 
     if not complete:
         await policy.failure(page, calendar_url, "Resultat calendar did not settle at the bottom; partial discovery was not cached")
-        return {}
+        raise CommandError(
+            f"Resultat calendar discovery for {month:%Y-%m} did not finish. "
+            "Partial discovery was not cached; the requested dates were not fully processed."
+        )
 
     if not any(results.values()):
         logger.warning("No usable Resultat calendar links found for %s.", month.strftime("%Y-%m"))
         await policy.failure(page, calendar_url, "Resultat calendar contained no usable result links")
-        return {}
+        raise CommandError(
+            f"No usable links could be read from the Resultat calendar for {month:%Y-%m}. "
+            "The requested dates were not fully processed."
+        )
 
     policy.remember(cache_key, results)
     policy.success(calendar_url)

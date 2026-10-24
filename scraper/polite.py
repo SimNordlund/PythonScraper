@@ -90,6 +90,7 @@ class ScrapePolicy:
         self._conn = None
         self.state = {}
         self._stopped = None
+        self._failed_pages = {}
         self._pages = 0
         self._closing = False
         self._request_lock = None
@@ -217,6 +218,18 @@ class ScrapePolicy:
         if until > time.time():
             when = datetime.fromtimestamp(until, timezone.utc).isoformat()
             raise ScrapeStopped(f"Scraping paused until {when}: {self.state.get('cooldown_reason', 'cooldown')}.")
+
+    def _require_complete(self):
+        # A later successful page resets the consecutive-failure counter, but
+        # must not hide an earlier failed page from shell loops or scrape_daily.
+        if self._failed_pages:
+            failed_urls = ", ".join(list(self._failed_pages)[:3])
+            if len(self._failed_pages) > 3:
+                failed_urls += ", ..."
+            raise CommandError(
+                f"Scrape incomplete: {len(self._failed_pages)} page(s) failed. "
+                f"Failed URLs: {failed_urls}. Successfully saved pages have been kept."
+            )
 
     def _stop(self, reason, seconds=DAY):
         self.state["cooldown_until"] = max(self.state.get("cooldown_until", 0), time.time() + seconds)
@@ -441,6 +454,7 @@ class ScrapePolicy:
                     self._user_agent = await page.evaluate("navigator.userAgent")
                     yield page
                     self.check()
+                    self._require_complete()
                 finally:
                     self._closing = True
                     await context.close()
@@ -522,6 +536,7 @@ class ScrapePolicy:
                     raise
 
     async def failure(self, page, url, reason):
+        self._failed_pages[url] = reason
         await self.check_page(page)
         self._page_active = False
         self._generation += 1
@@ -546,6 +561,7 @@ class ScrapePolicy:
         self.state["failures"] = 0
         self.state["processed"][url] = time.time()
         self._save()
+        self._failed_pages.pop(url, None)
 
     def is_recent(self, url, ttl_seconds):
         self.check()

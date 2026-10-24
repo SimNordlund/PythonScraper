@@ -342,7 +342,7 @@ async def find_startlist_ts_ids(page, policy: ScrapePolicy, first_day: date, las
         calendar_url = CALENDAR_URL.format(year=month.year, month=month.month)
         cache_key = f"startlist-calendar:{from_day.isoformat()}:{through_day.isoformat()}"
         cached_ids = policy.cached(cache_key, ttl_seconds=6 * 60 * 60)
-        if cached_ids:
+        if cached_ids is not None:
             ids.update(int(value) for value in cached_ids)
             month = next_month
             continue
@@ -424,18 +424,27 @@ async def find_startlist_ts_ids(page, policy: ScrapePolicy, first_day: date, las
         except (PlaywrightError, ValueError) as exc:
             logger.warning("Calendar lookup failed (%s).", type(exc).__name__)
             await policy.failure(page, calendar_url, "calendar lookup failed")
-            month = next_month
-            continue
+            raise CommandError(
+                f"Could not read the Startlista calendar for {month:%Y-%m}. "
+                "The requested dates were not fully processed."
+            ) from exc
         if not complete:
             await policy.failure(page, calendar_url, "calendar did not finish loading within the discovery limit")
-        elif not saw_date_header:
+            raise CommandError(
+                f"Startlista calendar discovery for {month:%Y-%m} did not finish. "
+                "Partial discovery was not cached; the requested dates were not fully processed."
+            )
+        if not saw_date_header:
             await policy.failure(page, calendar_url, "calendar has no recognizable date headers")
-        elif not found:
-            await policy.failure(page, calendar_url, "calendar has no startlist links for the requested dates")
-        else:
-            policy.remember(cache_key, sorted(found))
-            policy.success(calendar_url)
-            ids.update(found)
+            raise CommandError(
+                f"No date headings could be read from the Startlista calendar for {month:%Y-%m}. "
+                "The requested dates were not fully processed."
+            )
+        if not found:
+            logger.info("No Startlista links published between %s and %s.", from_day, through_day)
+        policy.remember(cache_key, sorted(found))
+        policy.success(calendar_url)
+        ids.update(found)
         month = next_month
     return sorted(ids)
 
