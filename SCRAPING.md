@@ -5,12 +5,32 @@ they are not a rate approved by Svensk Travsport and cannot guarantee that an IP
 will not be blocked. If access is still blocked, contact Svensk Travsport about
 permission or an appropriate data feed before resuming.
 
+## Windows setup
+
+Use the Windows Python launcher, `py`, in PowerShell. On this machine, `python`
+resolves to the Microsoft Store shortcut instead of the installed Python.
+
+```powershell
+cd "C:\Users\TaraR\Desktop\PythonScraper"
+py -m pip install -r requirements.txt
+py -m playwright install chromium
+```
+
+If pip reports `Successfully installed` or `Requirement already satisfied` and
+Playwright reports that Chromium was downloaded, setup has completed. A failed
+download mirror is not a final installation failure if a later mirror succeeds.
+Warnings that `playwright.exe` or `gunicorn.exe` are not on PATH do not prevent
+these `py -m` commands from working. No PATH changes are required for them.
+
+Use `py manage.py ...` for the commands below. Inside the Linux/Fly container,
+the existing `python manage.py ...` commands remain appropriate.
+
 ## Before the next run
 
 Apply the new state-table migration once, using the same database as the scraper:
 
 ```powershell
-python manage.py migrate
+py manage.py migrate
 ```
 
 The scraper refuses to send requests if it cannot read/write its state or acquire
@@ -59,7 +79,7 @@ failed/empty pages and incomplete discovery scans are not cached as successes.
 ## Commands
 
 ```powershell
-python manage.py scrape_daily
+py manage.py scrape_daily
 ```
 
 This runs startlists followed by results, stopping the sequence on a safety stop.
@@ -68,9 +88,9 @@ Results follow published result links from five days ago through today. Dates
 use Europe/Stockholm. Default runs no longer probe consecutive race IDs.
 
 ```powershell
-python manage.py scrape_results --calendar-date 2026-10-15
-python manage.py scrape_startlist --start-id 616290
-python manage.py scrape_proposition --start-id 610355
+py manage.py scrape_results --calendar-date 2026-10-15
+py manage.py scrape_startlist --start-id 616290
+py manage.py scrape_proposition --start-id 610355
 ```
 
 A single `--start-id` now fetches only that raceday. `--end-id` explicitly selects

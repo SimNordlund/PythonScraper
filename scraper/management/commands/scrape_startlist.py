@@ -1,14 +1,18 @@
-import asyncio, re, unicodedata, logging
+import asyncio
+import logging
 import random
+import re
+import unicodedata
 from dataclasses import dataclass
-from typing import List, Optional
 from datetime import date, timedelta
 from zoneinfo import ZoneInfo
-from django.utils import timezone
-from django.db import transaction
-from playwright.async_api import Error as PlaywrightError
+
 from django.core.management.base import BaseCommand, CommandError
-from scraper.models import StartList, HorseResult
+from django.db import transaction
+from django.utils import timezone
+from playwright.async_api import Error as PlaywrightError
+
+from scraper.models import HorseResult, StartList
 from scraper.polite import ScrapePolicy, ScrapeStopped
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -205,13 +209,13 @@ class StartRow:
     lopp: int
     nr: int
     namn: str
-    spar: Optional[int]
-    distans: Optional[int]
+    spar: int | None
+    distans: int | None
     kusk: str
     struken: bool
 
 
-async def scrape_startlist(page, policy: ScrapePolicy, url: str) -> List[StartRow]:
+async def scrape_startlist(page, policy: ScrapePolicy, url: str) -> list[StartRow]:
     await policy.goto(page, url)
     await policy.wait_for_selector(page, ROW_SELECTOR, timeout=120_000)
     await policy.wait_for_selector(page, LOPP_HEADER_SELECTOR, timeout=120_000)
@@ -225,7 +229,7 @@ async def scrape_startlist(page, policy: ScrapePolicy, url: str) -> List[StartRo
     bankod = track_to_bankod(raw_track)
     startdatum = int(swedish_date_to_yyyymmdd(date_txt))
 
-    out: List[StartRow] = []
+    out: list[StartRow] = []
     lopp_headers = page.locator("//h2[starts-with(normalize-space(),'Lopp')]")
     for i in range(await lopp_headers.count()):
         header = lopp_headers.nth(i)
@@ -320,12 +324,12 @@ def _format_ts_id(ts_id: int) -> str:
     return f"{s[:-3]}_{s[-3:]}" if len(s) > 3 else s
 
 
-def _startlist_ts_id_from_href(href: str) -> Optional[int]:
+def _startlist_ts_id_from_href(href: str) -> int | None:
     m = re.search(r"/race/raceday/ts(\d+)/startlist", href or "")
     return int(m.group(1)) if m else None
 
 
-async def find_startlist_ts_ids(page, policy: ScrapePolicy, first_day: date, last_day: date) -> List[int]:
+async def find_startlist_ts_ids(page, policy: ScrapePolicy, first_day: date, last_day: date) -> list[int]:
     """Use only published links for the requested dates; never guess IDs by default."""
     month = first_day.replace(day=1)
     ids = set()

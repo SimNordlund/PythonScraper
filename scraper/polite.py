@@ -17,16 +17,14 @@ from email.utils import parsedate_to_datetime
 from urllib.parse import urlsplit
 
 import psycopg
-from psycopg.types.json import Jsonb
 from django.conf import settings
 from django.core.management.base import CommandError
-from playwright.async_api import (
-    Error as PlaywrightError,
-    TimeoutError as PlaywrightTimeoutError,
-    async_playwright,
-)
-from scraper.robots import RobotsRules
+from playwright.async_api import Error as PlaywrightError
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import async_playwright
+from psycopg.types.json import Jsonb
 
+from scraper.robots import RobotsRules
 
 LOG = logging.getLogger(__name__)
 DAY = 24 * 60 * 60

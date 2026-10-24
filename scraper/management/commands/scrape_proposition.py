@@ -4,10 +4,11 @@ import random
 import re
 import unicodedata
 from dataclasses import dataclass
-from typing import List
-from playwright.async_api import Error as PlaywrightError
+
 from django.core.management.base import BaseCommand, CommandError
 from django.db import close_old_connections, transaction
+from playwright.async_api import Error as PlaywrightError
+
 from scraper.models import Proposition
 from scraper.polite import ScrapePolicy, ScrapeStopped
 
@@ -70,7 +71,7 @@ class PropRow:
     distans: int | None = None
     kuskanskemal: str | None = None  
 
-async def scrape_proposition_page(page, policy: ScrapePolicy, url: str) -> List[PropRow]:
+async def scrape_proposition_page(page, policy: ScrapePolicy, url: str) -> list[PropRow]:
     await policy.goto(page, url)
     await policy.wait_for_selector(page, "div[role='row'][data-rowindex]")
 
@@ -113,7 +114,7 @@ async def scrape_proposition_page(page, policy: ScrapePolicy, url: str) -> List[
         return []
 
     rows = await page.locator("div[role='row'][data-rowindex]").all()
-    out: List[PropRow] = []
+    out: list[PropRow] = []
     for row in rows:
         cell = row.locator("div[data-field='horseName'], div[data-field='horse']")
         if await cell.count() == 0:
@@ -153,7 +154,7 @@ async def scrape_proposition_page(page, policy: ScrapePolicy, url: str) -> List[
     return out
 
 
-async def fetch_prop_ids_for_day(page, policy: ScrapePolicy, day_id: int) -> List[int]:
+async def fetch_prop_ids_for_day(page, policy: ScrapePolicy, day_id: int) -> list[int]:
     list_url = f"https://sportapp.travsport.se/propositions/raceday/ts{day_id}"
     await policy.goto(page, list_url)
     link_sel = f"a[href*='/propositions/raceday/ts{day_id}/proposition/ts']"
@@ -210,7 +211,7 @@ async def fetch_prop_ids_for_day(page, policy: ScrapePolicy, day_id: int) -> Lis
     raise ValueError("Proposition list did not settle at the bottom; discovery was not cached")
 
 
-def save_rows(rows: List[PropRow]) -> None:
+def save_rows(rows: list[PropRow]) -> None:
     close_old_connections()
     try:
         with transaction.atomic():

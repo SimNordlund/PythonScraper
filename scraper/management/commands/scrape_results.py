@@ -1,13 +1,18 @@
-import asyncio, re, unicodedata, logging, random
+import asyncio
+import logging
+import random
+import re
+import unicodedata
 from dataclasses import dataclass
-from typing import List, Tuple, Optional
 from datetime import date, timedelta
 from urllib.parse import urljoin
 from zoneinfo import ZoneInfo
+
 from django.core.management.base import BaseCommand, CommandError
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 from playwright.async_api import Error as PlaywrightError
+
 from scraper.models import HorseResult
 from scraper.polite import ScrapePolicy, ScrapeStopped
 
@@ -193,7 +198,7 @@ SAMT_TILL_OVRIGA_RE = re.compile(
 PRISPLACERADE_RE = re.compile(r"\((\d+)\s*prisplacerade\)", re.IGNORECASE)
 LAGST_RE = re.compile(r"Lägst\s+([0-9][0-9\.\s\u00a0]*)\s*kr", re.IGNORECASE)
 
-def _parse_swe_int(token: str) -> Optional[int]:
+def _parse_swe_int(token: str) -> int | None:
     if token is None:
         return None
     t = normalize_cell_text(token)
@@ -208,7 +213,7 @@ def _parse_swe_int(token: str) -> Optional[int]:
     except ValueError:
         return None
 
-def parse_pris_text(full_text: str) -> Tuple[List[int], Optional[int], Optional[int]]:
+def parse_pris_text(full_text: str) -> tuple[list[int], int | None, int | None]:
     text = normalize_cell_text(full_text)
     if not text:
         return [], None, None
@@ -220,7 +225,7 @@ def parse_pris_text(full_text: str) -> Tuple[List[int], Optional[int], Optional[
 
     after = text[m0.end():]
 
-    prizes: List[int] = []
+    prizes: list[int] = []
     m1 = LEADING_PRIZES_RE.match(after)
     if m1:
         leading = m1.group(1)
@@ -250,7 +255,7 @@ def parse_pris_text(full_text: str) -> Tuple[List[int], Optional[int], Optional[
 
     return prizes, min_pris, pn
 
-def pris_for_lopp(prizes: List[int], min_pris: Optional[int]) -> int:
+def pris_for_lopp(prizes: list[int], min_pris: int | None) -> int:
     if prizes:
         return int(prizes[0])
     return int(min_pris) if min_pris is not None else 0
@@ -359,7 +364,7 @@ class Row:
     underlag: str
     kusk: str
     pris: int
-    odds: Optional[int] = None
+    odds: int | None = None
 
 
 async def _extract_pris_text_from_section(section) -> str:
@@ -380,7 +385,7 @@ async def _extract_pris_text_from_section(section) -> str:
     return ""
 
 
-async def scrape_page(page, url: str, policy: ScrapePolicy) -> List[Row]:
+async def scrape_page(page, url: str, policy: ScrapePolicy) -> list[Row]:
     try:
         await policy.goto(page, url)
     except PlaywrightError:
@@ -401,7 +406,7 @@ async def scrape_page(page, url: str, policy: ScrapePolicy) -> List[Row]:
     bankod = track_to_bankod(track_raw)  
     datum = int(swedish_date_to_yyyymmdd(date_txt))  
 
-    data: List[Row] = []
+    data: list[Row] = []
     lopp_headers = page.locator("//h2[starts-with(normalize-space(),'Lopp')]")
     header_count = await lopp_headers.count()
 
@@ -505,7 +510,7 @@ async def scrape_page(page, url: str, policy: ScrapePolicy) -> List[Row]:
 
 
 @transaction.atomic
-def write_rows_to_db(rows: List[Row]) -> int:
+def write_rows_to_db(rows: list[Row]) -> int:
     created_n = 0
     updated_n = 0
     unchanged_n = 0
@@ -620,7 +625,7 @@ def _format_ts_id(ts_id: int) -> str:
     return f"{s[:-3]}_{s[-3:]}" if len(s) > 3 else s
 
 
-def _results_ts_id_from_href(href: str) -> Optional[int]:
+def _results_ts_id_from_href(href: str) -> int | None:
     m = re.search(r"/race/raceday/ts(\d+)/results", href or "")
     return int(m.group(1)) if m else None
 

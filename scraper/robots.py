@@ -9,7 +9,6 @@ from fractions import Fraction
 from urllib.parse import quote, urlsplit
 from urllib.robotparser import RobotFileParser
 
-
 _UNRESERVED = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 _PERCENT = re.compile(r"%([0-9a-fA-F]{2})")
 
